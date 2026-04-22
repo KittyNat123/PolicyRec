@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>프로토타입 설계 정리</title>
+<style>
+  body { font-family: Arial, sans-serif; line-height: 1.6; padding: 20px; }
+  h1, h2, h3 { margin-top: 24px; }
+  table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+  th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+  th { background: #f5f5f5; }
+  ul { margin-top: 5px; }
+</style>
+</head>
+<body>
+
+<h1>프로토타입 설계</h1>
+
+<h2>1. 기능</h2>
+<ul>
+  <li>검색</li>
+  <li>필터</li>
+  <li>개인화 추천</li>
+</ul>
+
+<h2>2. 공통 컬럼</h2>
+<table>
+  <tr><th>컬럼명</th><th>설명</th></tr>
+  <tr><td>source</td><td>출처 사이트</td></tr>
+  <tr><td>source_id</td><td>원본 고유 ID</td></tr>
+  <tr><td>title</td><td>공고/정책 제목</td></tr>
+  <tr><td>summary</td><td>요약</td></tr>
+  <tr><td>content</td><td>상세 내용</td></tr>
+  <tr><td>category</td><td>분야</td></tr>
+  <tr><td>benefit_type</td><td>지원 형태</td></tr>
+  <tr><td>region</td><td>지역</td></tr>
+  <tr><td>target_group</td><td>대상</td></tr>
+  <tr><td>target_age</td><td>연령</td></tr>
+  <tr><td>start_date</td><td>신청 시작일 (Datetime)</td></tr>
+  <tr><td>end_date</td><td>신청 마감일 (Datetime)</td></tr>
+  <tr><td>detail_url</td><td>상세 URL</td></tr>
+</table>
+
+<h3>📌 매핑 기준 </h3>
+<table>
+  <tr>
+    <th>컬럼</th><th>YouthCenter</th><th>K-Startup</th><th>BizInfo</th>
+  </tr>
+  <tr><td>source_id</td><td>plcyNo</td><td>pbanc_sn</td><td>pblancId</td></tr>
+  <tr><td>title</td><td>plcyNm</td><td>biz_pbanc_nm</td><td>pblancNm</td></tr>
+  <tr><td>summary</td><td>plcyExplnCn</td><td>pbanc_ctnt</td><td>bsnsSumryCn</td></tr>
+  <tr><td>category</td><td>lclsfNm</td><td>supt_biz_clsfc</td><td>pldirSportRealmLclasCodeNm</td></tr>
+  <tr><td>region</td><td>zipCd</td><td>supt_regin</td><td>jrsdInsttNm</td></tr>
+  <tr><td>target_group</td><td>ptcpPrpTrgtCn</td><td>aply_trgt</td><td>trgetNm</td></tr>
+  <tr><td>target_age</td><td>min~max</td><td>biz_trgt_age</td><td>없음 → 기본값</td></tr>
+  <tr><td>start_date</td><td>bizPrdBgngYmd</td><td>pbanc_rcpt_bgng_dt</td><td>reqstBeginEndDe (분리 필요)</td></tr>
+  <tr><td>end_date</td><td>bizPrdEndYmd</td><td>pbanc_rcpt_end_dt</td><td>reqstBeginEndDe (분리 필요)</td></tr>
+  <tr><td>detail_url</td><td>aplyUrlAddr</td><td>detl_pg_url</td><td>pblancUrl</td></tr>
+</table>
+
+<p><strong>※ 처리 기준</strong><br>
+- 없는 값: 기본값 또는 상태값 처리<br>
+- 날짜: Datetime으로 통일<br>
+- 연령 없음: 0~99 또는 전연령 처리
+</p>
+
+<h2>3. 필터</h2>
+<table>
+  <tr><th>대분류</th><th>예시</th></tr>
+  <tr><td>분야</td><td>일자리, 창업, 주거 등</td></tr>
+  <tr><td>지역</td><td>전국, 서울, 경기 등</td></tr>
+  <tr><td>대상</td><td>나이, 기업상태</td></tr>
+  <tr><td>상태</td><td>접수중, 마감</td></tr>
+  <tr><td>지원내용</td><td>지원금, 교육 등</td></tr>
+</table>
+
+<h2>4. 개인화</h2>
+
+<h3>입력 정보</h3>
+<ul>
+  <li>필수: 나이, 상태, 관심 분야</li>
+  <li>선택: 지역, 창업 여부, 소득</li>
+</ul>
+
+<h3>기능</h3>
+<ul>
+  <li>맞춤형 공고 추천</li>
+  <li>스크랩 공고 모아보기</li>
+  <li>내 정보 기반 자동 필터링</li>
+</ul>
+
+<h3>사용 데이터</h3>
+<ul>
+  <li>사용자 입력 정보</li>
+  <li>스크랩 및 조회 로그</li>
+</ul>
+
+</body>
+</html>

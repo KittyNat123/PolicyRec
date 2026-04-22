@@ -1,0 +1,24 @@
+.env
+__pycache__/
+.venv/
+venv/
+.idea/
+.DS_Store
+.uv-cache/
+
+# raw 응답 산출물
+data/raw/**/*.json
+data/raw/**/*.xml
+data/raw/**/*.txt
+
+# 첨부파일 수집 산출물
+data/attachments/**
+
+# 정규화 산출물
+data/clean/*.csv
+
+# 폴더
+gitignore/
+
+# 초안/개인 작업 파일
+데이터 수집 파이프라인 초안.ipynb
