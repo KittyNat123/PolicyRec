@@ -3,6 +3,9 @@
 # 표 형태 데이터 확인 및 CSV 저장
 pandas
 
+# 정책 카드 리스트 화면
+streamlit
+
 # API 호출
 requests
 
