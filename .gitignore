@@ -28,3 +28,4 @@ gitignore/
 .streamlit_app.log
 .streamlit_app.err.log
 
+*.gsheet*
