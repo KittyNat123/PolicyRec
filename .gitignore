@@ -23,6 +23,7 @@ gitignore/
 
 # 초안/개인 작업 파일
 데이터 수집 파이프라인 초안.ipynb
+*_kwon*
 
 .ipynb_checkpoints/
 .streamlit_app.log
