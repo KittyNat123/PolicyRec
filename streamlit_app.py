@@ -39,6 +39,12 @@ PALETTE = {
     "bookmark": "#0D1B2A",
 }
 
+# target_group은 source마다 표현이 조금 다릅니다.
+# CSV 원본은 유지하고, 화면 표시/필터에서만 같은 의미의 짧은 alias를 합칩니다.
+TARGET_GROUP_ALIASES = {
+    "대학": "대학생",
+}
+
 REQUIRED_NORMALIZED_COLUMNS = [
     "source",
     "source_id",
@@ -79,6 +85,54 @@ def clean_text(value: object) -> str:
     text = re.sub(r"<[^>]+>", " ", text)
     text = text.replace("\r", " ").replace("\n", " ").replace("\t", " ")
     return re.sub(r"\s+", " ", text).strip()
+
+
+def split_target_group(value: object) -> list[str]:
+    """
+    target_group 원본 문자열을 화면 표시와 필터에 쓸 태그 목록으로 나눕니다.
+
+    CSV 원본값은 바꾸지 않습니다.
+    Streamlit 화면에서만 "대학생,일반인,1인 창조기업"을
+    ["대학생", "일반인", "1인 창조기업"]처럼 잠시 나눠 사용합니다.
+    """
+    text = clean_text(value)
+    if not text or text == "대상 미확인":
+        return []
+
+    tags = []
+    seen = set()
+    for part in text.split(","):
+        tag = part.strip()
+        if tag and tag not in seen:
+            tags.append(tag)
+            seen.add(tag)
+
+    return tags
+
+
+def normalize_target_group_tag(tag: str) -> str:
+    """대상 태그의 표시/필터용 alias를 표준 라벨로 바꿉니다."""
+    normalized = clean_text(tag)
+    return TARGET_GROUP_ALIASES.get(normalized, normalized)
+
+
+def normalize_target_group_tags(tags: list[str]) -> list[str]:
+    """대상 태그 목록에서 alias를 합치고 중복을 제거합니다."""
+    normalized_tags = []
+    seen = set()
+    for tag in tags:
+        normalized = normalize_target_group_tag(tag)
+        if normalized and normalized not in seen:
+            normalized_tags.append(normalized)
+            seen.add(normalized)
+    return normalized_tags
+
+
+def format_target_group_display(tags: list[str], fallback: str = "대상 미확인") -> str:
+    """대상 태그 목록을 필터/검색에 읽기 좋은 문자열로 바꿉니다."""
+    if not tags:
+        return fallback
+    return " · ".join(tags)
 
 
 def parse_date(value: object) -> pd.Timestamp | pd.NaT:
@@ -178,6 +232,8 @@ def normalize_for_display(normalized_df: pd.DataFrame) -> pd.DataFrame:
         region = clean_text(first_value(row, ["region"], "지역 미정"))
         provider = clean_text(first_value(row, ["provider"], "기관 미정"))
         target_group = clean_text(first_value(row, ["target_group"], "대상 미확인"))
+        target_group_tags = normalize_target_group_tags(split_target_group(target_group))
+        target_group_display = format_target_group_display(target_group_tags)
 
         records.append(
             {
@@ -190,6 +246,8 @@ def normalize_for_display(normalized_df: pd.DataFrame) -> pd.DataFrame:
                 "region": region,
                 "provider": provider,
                 "target_group": target_group,
+                "target_group_tags": target_group_tags,
+                "target_group_display": target_group_display,
                 "target_age": format_target_age(row),
                 "apply_start": parse_date(row.get("start_date")),
                 "apply_end": parse_date(row.get("end_date")),
@@ -214,12 +272,19 @@ def unique_options(df: pd.DataFrame, column: str, excluded: set[str] | None = No
         return []
 
     options = []
-    for value in df[column].dropna().unique():
+    for value in df[column].dropna():
+        if isinstance(value, list):
+            for item in value:
+                text = str(item).strip()
+                if text and text not in excluded:
+                    options.append(text)
+            continue
+
         text = str(value).strip()
         if text and text not in excluded:
             options.append(text)
 
-    return sorted(options)
+    return sorted(set(options))
 
 
 def d_day_label(end_date: pd.Timestamp | pd.NaT) -> str:
@@ -441,6 +506,28 @@ def inject_styles() -> None:
                 line-height: 1.45;
                 margin: 6px 0;
             }}
+            .target-tags {{
+                align-items: center;
+                display: flex;
+                flex-wrap: wrap;
+                gap: 5px;
+                margin: 7px 0;
+            }}
+            .target-chip {{
+                background: #F1F5F9;
+                border: 1px solid #D8DEE8;
+                border-radius: 999px;
+                color: #26384F;
+                display: inline-block;
+                font-size: 12px;
+                font-weight: 800;
+                line-height: 1;
+                max-width: 132px;
+                overflow: hidden;
+                padding: 5px 8px;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }}
             .empty {{
                 background: #FFFFFF;
                 border: 1px dashed {PALETTE["line"]};
@@ -540,7 +627,7 @@ def render_filter_bar(policy_df: pd.DataFrame) -> tuple[str, str, str, str, str,
     with col_region:
         region = st.selectbox("지역 선택", ["전체"] + unique_options(policy_df, "region", {"지역 미정"}))
     with col_target:
-        target = st.selectbox("대상 선택", ["전체"] + unique_options(policy_df, "target_group", {"대상 미확인"}))
+        target = st.selectbox("대상 선택", ["전체"] + unique_options(policy_df, "target_group_tags", {"대상 미확인"}))
     with col_category:
         category = st.selectbox("분야 선택", ["전체"] + unique_options(policy_df, "category", {"분류 미정"}))
     with col_search:
@@ -577,7 +664,7 @@ def apply_filters(
     if region != "전체":
         filtered_df = filtered_df[filtered_df["region"] == region]
     if target != "전체":
-        filtered_df = filtered_df[filtered_df["target_group"] == target]
+        filtered_df = filtered_df[filtered_df["target_group_tags"].apply(lambda tags: target in tags)]
     if category != "전체":
         filtered_df = filtered_df[filtered_df["category"] == category]
     if provider != "전체":
@@ -592,10 +679,20 @@ def apply_filters(
             | filtered_df["summary"].str.contains(pattern, case=False, na=False, regex=False)
             | filtered_df["region"].str.contains(pattern, case=False, na=False, regex=False)
             | filtered_df["provider"].str.contains(pattern, case=False, na=False, regex=False)
+            | filtered_df["target_group_display"].str.contains(pattern, case=False, na=False, regex=False)
         )
         filtered_df = filtered_df[search_target]
 
     return filtered_df
+
+
+def render_target_group_tags(tags: list[str], fallback: str) -> str:
+    """카드 안의 target_group을 작은 태그 묶음으로 렌더링합니다."""
+    if not tags:
+        return f'<div class="meta-line">대상: {escape(fallback)}</div>'
+
+    chips = "".join(f'<span class="target-chip">{escape(tag)}</span>' for tag in tags)
+    return f'<div class="target-tags">{chips}</div>'
 
 
 def render_card(policy: pd.Series) -> None:
@@ -612,7 +709,11 @@ def render_card(policy: pd.Series) -> None:
     provider = escape(str(policy["provider"]))
     summary = escape(str(policy["summary"]))
     region = escape(str(policy["region"]))
-    target_group = escape(str(policy["target_group"]))
+    target_group_raw = str(policy["target_group"])
+    target_group_tags = policy.get("target_group_tags", [])
+    if not isinstance(target_group_tags, list):
+        target_group_tags = split_target_group(target_group_raw)
+    target_group_html = render_target_group_tags(target_group_tags, target_group_raw)
     target_age = escape(str(policy["target_age"]))
     apply_start = escape(format_date(policy["apply_start"]))
     apply_end = escape(format_date(policy["apply_end"]))
@@ -633,7 +734,7 @@ def render_card(policy: pd.Series) -> None:
             <div class="provider-line">{provider}</div>
             <div class="summary-line">{summary}</div>
             <div class="meta-line">지역: {region}</div>
-            <div class="meta-line">대상: {target_group}</div>
+            {target_group_html}
             <div class="meta-line">연령: {target_age}</div>
             <div class="meta-line">기간: {apply_start} ~ {apply_end}</div>
         </div>
