@@ -9,8 +9,11 @@ import pandas as pd
 import streamlit as st
 
 
-# 팀 공유 기준인 PolicyRec_v1.1.ipynb의 정규화 결과를 읽습니다.
-CSV_PATH = Path("data/clean/combined_normalized_v1_1.csv")
+# 팀 공유 최신 기준의 정규화 CSV를 자동으로 찾습니다.
+# 예: combined_normalized_v1_1_2.csv, combined_normalized_v1.1.1.csv
+# 새 버전 CSV를 data/clean에 추가하면 파일명에서 버전 번호를 읽어 가장 높은 버전을 사용합니다.
+DATA_CLEAN_DIR = Path("data/clean")
+NORMALIZED_CSV_RE = re.compile(r"^combined_normalized_v(?P<version>\d+(?:[._]\d+)*)\.csv$")
 
 SOURCE_LABELS = {
     "biz": "기업마당",
@@ -39,6 +42,8 @@ REQUIRED_NORMALIZED_COLUMNS = [
     "summary",
     "category",
     "region",
+    "region_code",
+    "provider",
     "target_group",
     "target_age_min",
     "target_age_max",
@@ -96,8 +101,46 @@ def format_date(value: pd.Timestamp | pd.NaT) -> str:
     return value.strftime("%Y-%m-%d")
 
 
+def parse_version_tuple(path: Path) -> tuple[int, ...]:
+    """정규화 CSV 파일명에서 버전 번호를 숫자 튜플로 읽습니다.
+
+    예를 들어 v1_1_2와 v1.1.2는 모두 (1, 1, 2)로 바꿉니다.
+    이렇게 해두면 문자열 정렬보다 안전하게 최신 버전을 고를 수 있습니다.
+    """
+    match = NORMALIZED_CSV_RE.match(path.name)
+    if not match:
+        return ()
+
+    version_text = match.group("version").replace("_", ".")
+    return tuple(int(part) for part in version_text.split("."))
+
+
+def version_label_from_path(path: Path) -> str:
+    """선택된 CSV 파일명을 화면 표시용 버전 문구로 바꿉니다."""
+    version = parse_version_tuple(path)
+    if not version:
+        return "현재"
+
+    return "v" + ".".join(str(part) for part in version)
+
+
+def resolve_csv_path() -> Path:
+    """data/clean 폴더에서 가장 최신 버전의 정규화 CSV를 찾습니다."""
+    candidates = []
+    for path in DATA_CLEAN_DIR.glob("combined_normalized_v*.csv"):
+        version = parse_version_tuple(path)
+        if version:
+            candidates.append((version, path.stat().st_mtime, path))
+
+    if not candidates:
+        return DATA_CLEAN_DIR / "combined_normalized_v1_1_2.csv"
+
+    # 1순위는 버전 번호, 같은 버전 파일이 여러 개면 수정일이 더 늦은 파일을 사용합니다.
+    return max(candidates, key=lambda item: (item[0], item[1]))[2]
+
+
 def format_target_age(row: pd.Series) -> str:
-    """v1.1의 숫자 연령 컬럼을 화면용 문구로 바꿉니다."""
+    """정규화 CSV의 숫자 연령 컬럼을 화면용 문구로 바꿉니다."""
     min_text = first_value(row, ["target_age_min"])
     max_text = first_value(row, ["target_age_max"])
 
@@ -117,7 +160,7 @@ def format_target_age(row: pd.Series) -> str:
 
 
 def ensure_normalized_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """v1.1 CSV에 일부 컬럼이 없어도 화면이 멈추지 않도록 빈 컬럼을 보강합니다."""
+    """정규화 CSV에 일부 컬럼이 없어도 화면이 멈추지 않도록 빈 컬럼을 보강합니다."""
     df = df.copy()
     for column in REQUIRED_NORMALIZED_COLUMNS:
         if column not in df.columns:
@@ -126,7 +169,7 @@ def ensure_normalized_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def normalize_for_display(normalized_df: pd.DataFrame) -> pd.DataFrame:
-    """v1.1 정규화 CSV를 카드 화면에 필요한 표시용 컬럼으로 정리합니다."""
+    """정규화 CSV를 카드 화면에 필요한 표시용 컬럼으로 정리합니다."""
     normalized_df = ensure_normalized_columns(normalized_df)
     records = []
 
@@ -136,6 +179,8 @@ def normalize_for_display(normalized_df: pd.DataFrame) -> pd.DataFrame:
         title = clean_text(first_value(row, ["title"], "제목 없음"))
         summary = clean_text(first_value(row, ["summary"], title))
         category = clean_text(first_value(row, ["category"], "분류 미정"))
+        region = clean_text(first_value(row, ["region"], "지역 미정"))
+        provider = clean_text(first_value(row, ["provider"], "기관 미정"))
         target_group = clean_text(first_value(row, ["target_group"], "대상 미확인"))
         target_age = format_target_age(row)
         start_date = parse_date(row.get("start_date"))
@@ -151,6 +196,8 @@ def normalize_for_display(normalized_df: pd.DataFrame) -> pd.DataFrame:
                 "title": title,
                 "summary": summary,
                 "target_group": target_group,
+                "region": region,
+                "provider": provider,
                 "target_age": target_age,
                 "apply_start": start_date,
                 "apply_end": end_date,
@@ -173,6 +220,21 @@ def d_day_label(end_date: pd.Timestamp | pd.NaT) -> tuple[str, str]:
         return "D-Day", "urgent"
 
     return f"D-{days_left}", "urgent" if days_left <= 7 else "normal"
+
+
+def unique_options(df: pd.DataFrame, column: str, excluded: set[str] | None = None) -> list[str]:
+    """사이드바 필터에 사용할 값을 빈 값 없이 정렬해서 반환합니다."""
+    excluded = excluded or set()
+    if column not in df.columns:
+        return []
+
+    options = []
+    for value in df[column].dropna().unique():
+        text = str(value).strip()
+        if text and text not in excluded:
+            options.append(text)
+
+    return sorted(options)
 
 
 def inject_styles() -> None:
@@ -204,9 +266,9 @@ def inject_styles() -> None:
             }}
             .policy-card {{
                 border: 1px solid {PALETTE["line"]};
-                border-radius: 16px;
+                border-radius: 8px;
                 padding: 18px;
-                min-height: 292px;
+                min-height: 342px;
                 background: #FFFFFF;
                 box-shadow: 0 8px 22px rgba(13, 27, 42, 0.06);
                 margin-bottom: 12px;
@@ -283,7 +345,7 @@ def inject_styles() -> None:
             }}
             .empty {{
                 border: 1px dashed {PALETTE["line"]};
-                border-radius: 16px;
+                border-radius: 8px;
                 padding: 48px 24px;
                 text-align: center;
                 color: #415A77;
@@ -326,6 +388,8 @@ def render_card(policy: pd.Series) -> None:
     title = escape(str(policy["title"]))
     summary = escape(str(policy["summary"]))
     target_group = escape(str(policy["target_group"]))
+    region = escape(str(policy["region"]))
+    provider = escape(str(policy["provider"]))
     target_age = escape(str(policy["target_age"]))
     apply_start = escape(format_date(policy["apply_start"]))
     apply_end = escape(format_date(policy["apply_end"]))
@@ -343,6 +407,8 @@ def render_card(policy: pd.Series) -> None:
             <div class="dday">{dday_text}</div>
             <div class="policy-title">{title}</div>
             <div class="summary-line">{summary}</div>
+            <div class="meta-line">📍 지역: {region}</div>
+            <div class="meta-line">🏢 기관: {provider}</div>
             <div class="meta-line">👥 대상: {target_group}</div>
             <div class="meta-line">🎯 연령: {target_age}</div>
             <div class="meta-line">📅 기간: {apply_start} ~ {apply_end}</div>
@@ -376,6 +442,9 @@ def main() -> None:
     if "scraps" not in st.session_state:
         st.session_state.scraps = {}
 
+    csv_path = resolve_csv_path()
+    version_label = version_label_from_path(csv_path)
+
     st.sidebar.subheader(f"스크랩한 정책 ({len(st.session_state.scraps)}개)")
     if st.session_state.scraps:
         for item in st.session_state.scraps.values():
@@ -385,16 +454,30 @@ def main() -> None:
 
     st.markdown('<div class="main-title">정책정보 통합검색</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="subtle">v1.1 정규화 CSV를 기반으로 정책 카드를 표시합니다.</div>',
+        f'<div class="subtle">{version_label} 정규화 CSV를 기반으로 정책 카드를 표시합니다.</div>',
         unsafe_allow_html=True,
     )
 
-    if not CSV_PATH.exists():
-        st.error(f"CSV 파일을 찾을 수 없습니다: {CSV_PATH}")
+    if not csv_path.exists():
+        st.error(f"정규화 CSV 파일을 찾을 수 없습니다: {csv_path}")
         st.stop()
 
-    policy_df = load_policy_data(str(CSV_PATH))
-    st.caption(f"데이터 파일: {CSV_PATH}")
+    policy_df = load_policy_data(str(csv_path))
+    st.caption(f"데이터 파일: {csv_path}")
+
+    # 필터는 v1.1.x 정규화 CSV에 이미 있는 공통 컬럼만 사용합니다.
+    # provider는 아직 추천 기준으로 쓰기에는 불안정하므로 화면 필터와 검색 보조 조건으로만 둡니다.
+    source_options = unique_options(policy_df, "source_name")
+    region_options = unique_options(policy_df, "region", {"지역 미정"})
+    category_options = unique_options(policy_df, "category", {"분류 미정"})
+    provider_options = unique_options(policy_df, "provider", {"기관 미정"})
+
+    st.sidebar.divider()
+    st.sidebar.subheader("필터")
+    selected_sources = st.sidebar.multiselect("사이트", source_options)
+    selected_regions = st.sidebar.multiselect("지역", region_options)
+    selected_categories = st.sidebar.multiselect("분류", category_options)
+    selected_providers = st.sidebar.multiselect("기관", provider_options)
 
     search_text = st.text_input(
         "통합검색",
@@ -403,11 +486,24 @@ def main() -> None:
     )
 
     filtered_df = policy_df.copy()
+
+    # 아무 값도 고르지 않은 필터는 전체 허용으로 봅니다.
+    if selected_sources:
+        filtered_df = filtered_df[filtered_df["source_name"].isin(selected_sources)]
+    if selected_regions:
+        filtered_df = filtered_df[filtered_df["region"].isin(selected_regions)]
+    if selected_categories:
+        filtered_df = filtered_df[filtered_df["category"].isin(selected_categories)]
+    if selected_providers:
+        filtered_df = filtered_df[filtered_df["provider"].isin(selected_providers)]
+
     if search_text.strip():
         pattern = re.escape(search_text.strip())
         filtered_df = filtered_df[
             filtered_df["title"].str.contains(pattern, case=False, na=False, regex=True)
             | filtered_df["summary"].str.contains(pattern, case=False, na=False, regex=True)
+            | filtered_df["region"].str.contains(pattern, case=False, na=False, regex=True)
+            | filtered_df["provider"].str.contains(pattern, case=False, na=False, regex=True)
         ]
 
     st.markdown(f"**총 {len(filtered_df):,}건의 정책정보가 있습니다**")
