@@ -313,15 +313,34 @@ def deadline_status(end_date: pd.Timestamp | pd.NaT) -> str:
     return "접수중"
 
 
+def deadline_days(end_date: object) -> int | None:
+    """마감일까지 남은 일수를 정렬용 숫자로 계산합니다."""
+    if pd.isna(end_date):
+        return None
+
+    timestamp = pd.to_datetime(end_date, errors="coerce")
+    if pd.isna(timestamp):
+        return None
+
+    return (timestamp.date() - date.today()).days
+
+
 def sort_policies(df: pd.DataFrame, sort_option: str) -> pd.DataFrame:
     """정렬 옵션에 맞게 결과를 정렬합니다."""
+    if df.empty:
+        return df.copy()
+
     if sort_option == "마감 임박순":
-        sorted_df = df.assign(
-            _deadline_order=df["apply_end"].apply(
-                lambda value: 999999 if pd.isna(value) else (value.date() - date.today()).days
-            )
-        )
-        sorted_df = sorted_df[sorted_df["_deadline_order"] >= 0]
+        sorted_df = df.assign(_deadline_order=df["apply_end"].apply(deadline_days))
+        sorted_df = sorted_df.loc[sorted_df["_deadline_order"].notna()].copy()
+        if sorted_df.empty:
+            return sorted_df.drop(columns="_deadline_order")
+
+        sorted_df["_deadline_order"] = sorted_df["_deadline_order"].astype(int)
+        sorted_df = sorted_df.loc[sorted_df["_deadline_order"] >= 0]
+        if sorted_df.empty:
+            return sorted_df.drop(columns="_deadline_order")
+
         return sorted_df.sort_values("_deadline_order").drop(columns="_deadline_order")
 
     if sort_option == "신규 시작일순":
@@ -661,16 +680,33 @@ def apply_filters(
 
     if selected_sources:
         filtered_df = filtered_df[filtered_df["source_name"].isin(selected_sources)]
+    if filtered_df.empty:
+        return filtered_df
+
     if region != "전체":
         filtered_df = filtered_df[filtered_df["region"] == region]
+    if filtered_df.empty:
+        return filtered_df
+
     if target != "전체":
         filtered_df = filtered_df[filtered_df["target_group_tags"].apply(lambda tags: target in tags)]
+    if filtered_df.empty:
+        return filtered_df
+
     if category != "전체":
         filtered_df = filtered_df[filtered_df["category"] == category]
+    if filtered_df.empty:
+        return filtered_df
+
     if provider != "전체":
         filtered_df = filtered_df[filtered_df["provider"] == provider]
+    if filtered_df.empty:
+        return filtered_df
+
     if status != "전체":
         filtered_df = filtered_df[filtered_df["apply_end"].apply(deadline_status) == status]
+    if filtered_df.empty:
+        return filtered_df
 
     if search_text.strip():
         pattern = search_text.strip()
