@@ -1,23 +1,43 @@
-# PolicyRec v1.0 필수 패키지
+# PolicyRec current runtime requirements
+#
+# Scope:
+# - raw API collection / normalization notebooks
+# - Streamlit prototype apps
+# - Gemini-based chatbot / embedding experiments
+# - Supabase RAG load and retrieval notebooks
 
-# 표 형태 데이터 확인 및 CSV 저장
+# Core data handling
 pandas
-
-# 정책 카드 리스트 화면
-streamlit
-
-# API 호출
+numpy
 requests
-
-# .env 파일에서 API 키 읽기
 python-dotenv
 
-# Jupyter 노트북 실행 커널
+# Streamlit prototype web apps
+streamlit
+
+# Local TF-IDF / similarity search
+scikit-learn
+
+# Notebook runtime
 ipykernel
+IPython
 
-# Excel 파일 확인/저장이 필요할 때 pandas가 사용하는 보조 패키지
+# Gemini SDKs
+# streamlit_app2.py uses `from google import genai`
+google-genai
+# v1.2 notebooks use `import google.generativeai as genai`
+google-generativeai
+
+# Supabase / pgvector pipeline
+supabase
+
+# HTML cleanup / parsing used in v1.2 pipeline notebooks
+beautifulsoup4
+
+# Spreadsheet / document helpers referenced in project workflow
 openpyxl
-
-# 첨부파일 노트북을 다시 다룰 때 필요한 선택 패키지
 pypdf
 python-docx
+
+# Optional config/data helpers seen in notebooks
+PyYAML

@@ -8,6 +8,19 @@ v1.0에서는 공식 API에서 받은 원본 데이터를 안전하게 확인하
 
 추가로 `streamlit_app.py`를 통해 v1.1 정규화 CSV를 카드 리스트 화면으로 미리 확인할 수 있습니다. 이 앱은 최종 서비스가 아니라, 팀이 정규화 결과가 화면에서 어떻게 보일지 빠르게 검토하기 위한 프로토타입입니다.
 
+## 현재 기준 (2026-04-24)
+
+- 최신 정규화 기준 노트북: PolicyRec_v1_1_3.ipynb
+- PolicyRec_v1_2_1.ipynb: Supabase + Gemini 임베딩 적재 파이프라인 검증용 노트북
+- policyRec_v1_2_2.ipynb: Supabase RPC 기반 RAG 검색/응답 검증용 노트북
+- supabase_readme.md: Supabase 테이블, pgvector, RPC 함수, 적재 흐름 정리 문서
+
+## Streamlit 앱 파일 구분
+
+- streamlit_app.py: v1.1 정규화 CSV를 빠르게 검토하는 초기 카드 뷰어
+- streamlit_app2.py: 현재 프로토타입 웹 UI. CSV + TF-IDF + Gemini 기반 챗봇/검색 실험용
+- streamlit_app3.py: streamlit_app2.py를 베이스로 Supabase/RAG 연동을 붙여 갈 다음 작업 파일
+
 ## 현재 목표
 
 1. v1.0 결과인 `data/clean/combined_raw_columns.csv`를 기준 데이터로 사용합니다.
@@ -276,6 +289,20 @@ RUN_FETCH = True
 ```
 
 ## Streamlit 앱 실행 방법
+
+현재 작업 기준은 아래처럼 나눠서 봅니다.
+
+- 화면/프로토타입 확인: streamlit_app2.py
+- Supabase/RAG 연동 작업 베이스: streamlit_app3.py
+
+예시 실행:
+
+`ash
+streamlit run streamlit_app2.py
+streamlit run streamlit_app3.py
+`
+
+
 
 v1.1 정규화 CSV를 카드 리스트 화면으로 확인하려면 아래 파일을 실행합니다.
 
