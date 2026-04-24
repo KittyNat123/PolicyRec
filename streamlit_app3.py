@@ -181,18 +181,18 @@ def save_profile_preferences(filters: dict[str, str]) -> None:
     PROFILE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def ensure_app3_2_session() -> None:
+def ensure_app3_session() -> None:
     saved_filters = load_profile_preferences()
 
     defaults = {
-        "app3_2_page": PAGE_SEARCH,
-        "app3_2_show_admin_panel": False,
-        "app3_2_saved_filters": saved_filters,
-        "app3_2_applied_filters": FILTER_DEFAULTS.copy(),
-        "app3_2_use_saved_filters": False,
-        "app3_2_use_saved_filters_prev": False,
-        "app3_2_pending_reset_saved_toggle": False,
-        "app3_2_chat_history": [],
+        "app3_page": PAGE_SEARCH,
+        "app3_show_admin_panel": False,
+        "app3_saved_filters": saved_filters,
+        "app3_applied_filters": FILTER_DEFAULTS.copy(),
+        "app3_use_saved_filters": False,
+        "app3_use_saved_filters_prev": False,
+        "app3_pending_reset_saved_toggle": False,
+        "app3_chat_history": [],
         "chat_open": False,
         "chat_bubble_visible": True,
     }
@@ -201,12 +201,12 @@ def ensure_app3_2_session() -> None:
             st.session_state[key] = value
 
     widget_defaults = {
-        "app3_2_filter_search": FILTER_DEFAULTS["search"],
-        "app3_2_filter_region": FILTER_DEFAULTS["region"],
-        "app3_2_filter_target": FILTER_DEFAULTS["target"],
-        "app3_2_filter_category": FILTER_DEFAULTS["category"],
-        "app3_2_filter_provider": FILTER_DEFAULTS["provider"],
-        "app3_2_filter_recruitment_status": FILTER_DEFAULTS["recruitment_status"],
+        "app3_filter_search": FILTER_DEFAULTS["search"],
+        "app3_filter_region": FILTER_DEFAULTS["region"],
+        "app3_filter_target": FILTER_DEFAULTS["target"],
+        "app3_filter_category": FILTER_DEFAULTS["category"],
+        "app3_filter_provider": FILTER_DEFAULTS["provider"],
+        "app3_filter_recruitment_status": FILTER_DEFAULTS["recruitment_status"],
     }
     for key, value in widget_defaults.items():
         if key not in st.session_state:
@@ -283,42 +283,42 @@ def get_filter_options(df: pd.DataFrame) -> dict[str, list[str]]:
 
 
 def sync_search_widgets(filters: dict[str, str]) -> None:
-    st.session_state["app3_2_filter_search"] = filters.get("search", "")
-    st.session_state["app3_2_filter_region"] = filters.get("region", ALL)
-    st.session_state["app3_2_filter_target"] = filters.get("target", ALL)
-    st.session_state["app3_2_filter_category"] = filters.get("category", ALL)
-    st.session_state["app3_2_filter_provider"] = filters.get("provider", ALL)
-    st.session_state["app3_2_filter_recruitment_status"] = filters.get("recruitment_status", ALL)
+    st.session_state["app3_filter_search"] = filters.get("search", "")
+    st.session_state["app3_filter_region"] = filters.get("region", ALL)
+    st.session_state["app3_filter_target"] = filters.get("target", ALL)
+    st.session_state["app3_filter_category"] = filters.get("category", ALL)
+    st.session_state["app3_filter_provider"] = filters.get("provider", ALL)
+    st.session_state["app3_filter_recruitment_status"] = filters.get("recruitment_status", ALL)
 
 
 def get_search_widget_filters() -> dict[str, str]:
     return {
-        "search": str(st.session_state.get("app3_2_filter_search", "")).strip(),
-        "region": str(st.session_state.get("app3_2_filter_region", ALL)),
-        "target": str(st.session_state.get("app3_2_filter_target", ALL)),
-        "category": str(st.session_state.get("app3_2_filter_category", ALL)),
-        "provider": str(st.session_state.get("app3_2_filter_provider", ALL)),
-        "recruitment_status": str(st.session_state.get("app3_2_filter_recruitment_status", ALL)),
+        "search": str(st.session_state.get("app3_filter_search", "")).strip(),
+        "region": str(st.session_state.get("app3_filter_region", ALL)),
+        "target": str(st.session_state.get("app3_filter_target", ALL)),
+        "category": str(st.session_state.get("app3_filter_category", ALL)),
+        "provider": str(st.session_state.get("app3_filter_provider", ALL)),
+        "recruitment_status": str(st.session_state.get("app3_filter_recruitment_status", ALL)),
     }
 
 
 def save_saved_filters(filters: dict[str, str]) -> None:
     saved = FILTER_DEFAULTS.copy()
     saved.update(filters)
-    st.session_state["app3_2_saved_filters"] = saved
+    st.session_state["app3_saved_filters"] = saved
     save_profile_preferences(saved)
 
 
 def reset_search_filters() -> None:
-    st.session_state["app3_2_pending_reset_saved_toggle"] = True
-    st.session_state["app3_2_applied_filters"] = FILTER_DEFAULTS.copy()
+    st.session_state["app3_pending_reset_saved_toggle"] = True
+    st.session_state["app3_applied_filters"] = FILTER_DEFAULTS.copy()
 
 
 def reset_saved_filters() -> None:
     save_saved_filters(FILTER_DEFAULTS.copy())
 
 
-def on_chat_dialog_dismiss_app3_2() -> None:
+def on_chat_dialog_dismiss_app3() -> None:
     st.session_state["chat_open"] = False
     st.session_state["chat_bubble_visible"] = True
 
@@ -567,12 +567,12 @@ def render_topbar(version_label: str) -> None:
 def render_sidebar_navigation() -> None:
     with st.sidebar:
         st.markdown("### 메뉴")
-        current_page = st.session_state["app3_2_page"]
-        if st.button("통합검색", key="app3_2_nav_search", use_container_width=True, type="primary" if current_page == PAGE_SEARCH else "secondary"):
-            st.session_state["app3_2_page"] = PAGE_SEARCH
+        current_page = st.session_state["app3_page"]
+        if st.button("통합검색", key="app3_nav_search", use_container_width=True, type="primary" if current_page == PAGE_SEARCH else "secondary"):
+            st.session_state["app3_page"] = PAGE_SEARCH
             st.rerun()
-        if st.button("내 프로필", key="app3_2_nav_profile", use_container_width=True, type="primary" if current_page == PAGE_PROFILE else "secondary"):
-            st.session_state["app3_2_page"] = PAGE_PROFILE
+        if st.button("내 프로필", key="app3_nav_profile", use_container_width=True, type="primary" if current_page == PAGE_PROFILE else "secondary"):
+            st.session_state["app3_page"] = PAGE_PROFILE
             st.rerun()
 
 
@@ -613,40 +613,40 @@ def build_personalized_examples(saved_filters: dict[str, str]) -> list[str]:
 
 
 def render_search_filters(df: pd.DataFrame) -> dict[str, str]:
-    saved_filters = st.session_state["app3_2_saved_filters"]
+    saved_filters = st.session_state["app3_saved_filters"]
     options = get_filter_options(df)
 
-    if st.session_state.get("app3_2_pending_reset_saved_toggle", False):
+    if st.session_state.get("app3_pending_reset_saved_toggle", False):
         sync_search_widgets(FILTER_DEFAULTS.copy())
-        st.session_state["app3_2_use_saved_filters"] = False
-        st.session_state["app3_2_use_saved_filters_prev"] = False
-        st.session_state["app3_2_pending_reset_saved_toggle"] = False
+        st.session_state["app3_use_saved_filters"] = False
+        st.session_state["app3_use_saved_filters_prev"] = False
+        st.session_state["app3_pending_reset_saved_toggle"] = False
 
-    load_saved = st.checkbox("내 필터 불러오기", key="app3_2_use_saved_filters", help="저장된 내 필터를 현재 검색창에 반영합니다.")
-    if load_saved != st.session_state["app3_2_use_saved_filters_prev"]:
+    load_saved = st.checkbox("내 필터 불러오기", key="app3_use_saved_filters", help="저장된 내 필터를 현재 검색창에 반영합니다.")
+    if load_saved != st.session_state["app3_use_saved_filters_prev"]:
         if load_saved:
             sync_search_widgets(saved_filters)
-            st.session_state["app3_2_applied_filters"] = saved_filters.copy()
-        st.session_state["app3_2_use_saved_filters_prev"] = load_saved
+            st.session_state["app3_applied_filters"] = saved_filters.copy()
+        st.session_state["app3_use_saved_filters_prev"] = load_saved
         st.rerun()
 
     st.markdown('<div class="filter-shell">', unsafe_allow_html=True)
-    with st.form("app3_2_search_form", clear_on_submit=False):
+    with st.form("app3_search_form", clear_on_submit=False):
         col_search, col_region, col_target = st.columns([2.1, 1, 1], gap="small")
         with col_search:
-            st.text_input("검색어 입력", placeholder="사업명, 요약, 기관, 지역 검색", key="app3_2_filter_search")
+            st.text_input("검색어 입력", placeholder="사업명, 요약, 기관, 지역 검색", key="app3_filter_search")
         with col_region:
-            st.selectbox("지역 선택", options["region"], key="app3_2_filter_region")
+            st.selectbox("지역 선택", options["region"], key="app3_filter_region")
         with col_target:
-            st.selectbox("대상 선택", options["target"], key="app3_2_filter_target")
+            st.selectbox("대상 선택", options["target"], key="app3_filter_target")
 
         col_category, col_provider, col_status = st.columns([1, 1.2, 1], gap="small")
         with col_category:
-            st.selectbox("분야 선택", options["category"], key="app3_2_filter_category")
+            st.selectbox("분야 선택", options["category"], key="app3_filter_category")
         with col_provider:
-            st.selectbox("기관 선택", options["provider"], key="app3_2_filter_provider")
+            st.selectbox("기관 선택", options["provider"], key="app3_filter_provider")
         with col_status:
-            st.selectbox("모집 상태", options["recruitment_status"], key="app3_2_filter_recruitment_status")
+            st.selectbox("모집 상태", options["recruitment_status"], key="app3_filter_recruitment_status")
 
         action_a, action_b, action_c = st.columns([1, 1, 1], gap="small")
         with action_a:
@@ -659,7 +659,7 @@ def render_search_filters(df: pd.DataFrame) -> dict[str, str]:
 
     current_filters = get_search_widget_filters()
     if submit_search:
-        st.session_state["app3_2_applied_filters"] = current_filters.copy()
+        st.session_state["app3_applied_filters"] = current_filters.copy()
     if save_current:
         save_saved_filters(current_filters.copy())
         st.toast("현재 필터를 저장했어요.")
@@ -667,11 +667,11 @@ def render_search_filters(df: pd.DataFrame) -> dict[str, str]:
         reset_search_filters()
         st.rerun()
 
-    return st.session_state["app3_2_applied_filters"]
+    return st.session_state["app3_applied_filters"]
 
 
 def render_profile_page(df: pd.DataFrame) -> None:
-    saved_filters = st.session_state["app3_2_saved_filters"]
+    saved_filters = st.session_state["app3_saved_filters"]
     st.markdown("### 내 프로필")
     st.caption("저장된 내 필터와 스크랩한 정책을 확인할 수 있습니다.")
 
@@ -679,7 +679,7 @@ def render_profile_page(df: pd.DataFrame) -> None:
     with title_col:
         st.markdown("#### 저장된 내 필터")
     with action_col:
-        if st.button("초기화", key="app3_2_reset_saved_filters", use_container_width=True):
+        if st.button("초기화", key="app3_reset_saved_filters", use_container_width=True):
             reset_saved_filters()
             st.toast("저장된 내 필터를 초기화했어요.")
             st.rerun()
@@ -696,7 +696,7 @@ def render_profile_page(df: pd.DataFrame) -> None:
 
 def render_supabase_status(raw_df: pd.DataFrame, total_count: int | None) -> None:
     with st.sidebar.expander("개발자 도구", expanded=False):
-        show_admin = st.checkbox("Supabase 상태 보기", key="app3_2_show_admin_panel")
+        show_admin = st.checkbox("Supabase 상태 보기", key="app3_show_admin_panel")
         if not show_admin:
             st.caption("프로토타입에서는 기본적으로 숨겨둡니다.")
             return
@@ -711,7 +711,7 @@ def render_supabase_status(raw_df: pd.DataFrame, total_count: int | None) -> Non
         if total_count is not None:
             st.caption(f"DB 전체 행 수: {total_count:,}")
 
-        if st.button("DB 새로고침", key="app3_2_refresh_db", use_container_width=True):
+        if st.button("DB 새로고침", key="app3_refresh_db", use_container_width=True):
             fetch_supabase_rows.clear()
             st.rerun()
 
@@ -719,7 +719,7 @@ def render_supabase_status(raw_df: pd.DataFrame, total_count: int | None) -> Non
         st.dataframe(raw_df[preview_columns].head(20), use_container_width=True, hide_index=True)
 
 
-def inject_app3_2_styles() -> None:
+def inject_app3_styles() -> None:
     st.markdown(
         """
         <style>
@@ -757,7 +757,7 @@ def render_chat_policy_item(policy: dict[str, Any], key_prefix: str) -> None:
     badge_bg, badge_text = SOURCE_BADGE_STYLES.get(source, (BG_LIGHT, SLATE_TEXT))
     safe_key = make_widget_key(f"{key_prefix}_{row_id}")
 
-    with st.container(key=f"app3_2_chat_policy_{safe_key}", border=True):
+    with st.container(key=f"app3_chat_policy_{safe_key}", border=True):
         top_col, action_col = st.columns([8, 1], gap="small")
         with top_col:
             st.markdown(
@@ -771,7 +771,7 @@ def render_chat_policy_item(policy: dict[str, Any], key_prefix: str) -> None:
                 unsafe_allow_html=True,
             )
         with action_col:
-            if row_id and st.button("★" if is_scraped else "☆", key=f"app3_2_chat_scrap_{safe_key}", help="스크랩"):
+            if row_id and st.button("★" if is_scraped else "☆", key=f"app3_chat_scrap_{safe_key}", help="스크랩"):
                 toggle_scrap(row_id, title, source_name, detail_link)
                 st.rerun()
 
@@ -797,9 +797,9 @@ def render_chat_history_block(history: list[dict[str, Any]]) -> None:
                     render_chat_policy_item(policy, f"hist-{msg_idx}-{idx}")
 
 
-@st.dialog("PolicyRec 챗봇", width="large", on_dismiss=on_chat_dialog_dismiss_app3_2)
-def chatbot_dialog_app3_2(df: pd.DataFrame, client, supabase_client: Client, saved_filters: dict[str, str]) -> None:
-    history_key = "app3_2_chat_history"
+@st.dialog("PolicyRec 챗봇", width="large", on_dismiss=on_chat_dialog_dismiss_app3)
+def chatbot_dialog_app3(df: pd.DataFrame, client, supabase_client: Client, saved_filters: dict[str, str]) -> None:
+    history_key = "app3_chat_history"
     history = st.session_state[history_key]
     examples = build_personalized_examples(saved_filters)
 
@@ -807,11 +807,11 @@ def chatbot_dialog_app3_2(df: pd.DataFrame, client, supabase_client: Client, sav
     with col_hint:
         st.caption("정책 추천이나 조건 기반 탐색을 자연어로 물어보세요.")
     with col_reset:
-        if st.button("대화 초기화", key="app3_2_reset_chat", use_container_width=True):
+        if st.button("대화 초기화", key="app3_reset_chat", use_container_width=True):
             st.session_state[history_key] = []
             st.rerun()
     with col_close:
-        if st.button("닫기", key="app3_2_close_chat", use_container_width=True):
+        if st.button("닫기", key="app3_close_chat", use_container_width=True):
             st.session_state["chat_open"] = False
             st.session_state["chat_bubble_visible"] = True
             st.rerun()
@@ -925,9 +925,9 @@ def render_search_page(policy_df: pd.DataFrame) -> None:
 
 def main() -> None:
     inject_styles()
-    inject_app3_2_styles()
+    inject_app3_styles()
     ensure_session()
-    ensure_app3_2_session()
+    ensure_app3_session()
 
     if create_client is None:
         st.error("`supabase` 패키지가 없습니다. `pip install -r requirements.txt` 후 다시 실행해주세요.")
@@ -962,7 +962,7 @@ def main() -> None:
     inject_chat_icon(icon_b64)
     render_topbar(version_label)
 
-    if st.session_state["app3_2_page"] == PAGE_SEARCH:
+    if st.session_state["app3_page"] == PAGE_SEARCH:
         render_search_page(policy_df)
     else:
         render_profile_page(policy_df)
@@ -974,7 +974,7 @@ def main() -> None:
             st.rerun()
 
     if st.session_state.get("chat_open", False):
-        chatbot_dialog_app3_2(policy_df, client, supabase_client, st.session_state["app3_2_saved_filters"])
+        chatbot_dialog_app3(policy_df, client, supabase_client, st.session_state["app3_saved_filters"])
 
 
 if __name__ == "__main__":

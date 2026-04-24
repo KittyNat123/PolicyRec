@@ -18,9 +18,8 @@ v1.0에서는 공식 API에서 받은 원본 데이터를 안전하게 확인하
 ## Streamlit 앱 파일 구분
 
 - streamlit_app.py: v1.1 정규화 CSV를 빠르게 검토하는 초기 카드 뷰어
-- streamlit_app2.py: 현재 프로토타입 웹 UI. CSV + TF-IDF + Gemini 기반 챗봇/검색 실험용
-- streamlit_app3.py: streamlit_app2.py를 베이스로 Supabase/RAG 연동을 붙여 갈 다음 작업 파일
-- streamlit_app3_2.py : 현재 메인 실험 버전. Supabase 기반 UI + 내 필터/프로필 + 챗봇 개선 + 벡터 검색(RPC, embedding/content) 연동
+- streamlit_app2.py: CSV + TF-IDF + Gemini 기반 챗봇/검색 프로토타입 (app3의 공통 모듈 제공용으로도 사용)
+- streamlit_app3.py: 현재 메인 실험 버전. Supabase 기반 UI + 내 필터/프로필 + 챗봇 개선 + 벡터 검색(RPC, embedding/content) 연동
 
 ## 현재 목표
 
@@ -293,15 +292,15 @@ RUN_FETCH = True
 
 현재 작업 기준은 아래처럼 나눠서 봅니다.
 
-- 화면/프로토타입 확인: streamlit_app2.py
-- Supabase/RAG 연동 작업 베이스: streamlit_app3.py
+- 화면/챗봇 프로토타입 확인 (CSV 기반): streamlit_app2.py
+- Supabase + 벡터 RAG + 프로필 UI 메인 버전: streamlit_app3.py
 
 예시 실행:
 
-`ash
+```bash
 streamlit run streamlit_app2.py
 streamlit run streamlit_app3.py
-`
+```
 
 
 
