@@ -20,6 +20,7 @@ v1.0에서는 공식 API에서 받은 원본 데이터를 안전하게 확인하
 - streamlit_app.py: v1.1 정규화 CSV를 빠르게 검토하는 초기 카드 뷰어
 - streamlit_app2.py: 현재 프로토타입 웹 UI. CSV + TF-IDF + Gemini 기반 챗봇/검색 실험용
 - streamlit_app3.py: streamlit_app2.py를 베이스로 Supabase/RAG 연동을 붙여 갈 다음 작업 파일
+- streamlit_app3_2.py : 현재 메인 실험 버전. Supabase 기반 UI + 내 필터/프로필 + 챗봇 개선 + 벡터 검색(RPC, embedding/content) 연동
 
 ## 현재 목표
 
