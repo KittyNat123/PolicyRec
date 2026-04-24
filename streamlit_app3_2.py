@@ -18,6 +18,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 from streamlit_app import d_day_label, ensure_normalized_columns, format_date, normalize_for_display, unique_options
 from streamlit_app2 import (
+    _call_gemini,
     BG_LIGHT,
     SLATE_TEXT,
     SOURCE_BADGE_STYLES,
@@ -116,6 +117,7 @@ def fetch_supabase_rows(url: str, key: str, table_name: str = SUPABASE_TABLE) ->
     client = create_client(url, key)
     columns = ",".join(
         [
+            "id",
             "source",
             "source_id",
             "source_file",
@@ -130,6 +132,7 @@ def fetch_supabase_rows(url: str, key: str, table_name: str = SUPABASE_TABLE) ->
             "end_date",
             "detail_url",
             "provider",
+            "content",
             "created_at",
             "updated_at",
         ]
@@ -258,6 +261,14 @@ def prepare_policy_dataframe(raw_df: pd.DataFrame) -> pd.DataFrame:
     display_df["resolved_detail_url"] = [pair[0] for pair in resolved_pairs]
     display_df["detail_url_is_fallback"] = [pair[1] for pair in resolved_pairs]
     display_df["recruitment_status"] = display_df.apply(resolve_recruitment_status, axis=1)
+    if "id" in raw_df.columns:
+        display_df["announcement_id"] = pd.Series(raw_df["id"]).tolist()
+    else:
+        display_df["announcement_id"] = [None] * len(display_df)
+    if "content" in raw_df.columns:
+        display_df["content"] = raw_df["content"].fillna("").astype(str).tolist()
+    else:
+        display_df["content"] = [""] * len(display_df)
     return display_df
 
 
@@ -435,6 +446,85 @@ def rank_chat_results(top_df: pd.DataFrame) -> pd.DataFrame:
         ranked["score"] = 0.0
     ranked = ranked.sort_values(["detail_rank", "score"], ascending=[True, False])
     return ranked.drop(columns=["detail_rank"], errors="ignore")
+
+
+def get_query_embedding(client, text: str, output_dimensionality: int = 768) -> list[float]:
+    response = client.models.embed_content(
+        model="gemini-embedding-001",
+        contents=text,
+        config={"output_dimensionality": output_dimensionality},
+    )
+    return list(response.embeddings[0].values)
+
+
+def search_similar_announcements(supabase_client: Client, client, query_text: str, threshold: float = 0.3, count: int = 12) -> pd.DataFrame:
+    if not query_text.strip():
+        return pd.DataFrame()
+
+    query_embedding = get_query_embedding(client, query_text)
+    response = supabase_client.rpc(
+        "match_announcements",
+        {
+            "query_embedding": query_embedding,
+            "match_threshold": threshold,
+            "match_count": count,
+        },
+    ).execute()
+    return pd.DataFrame(response.data or [])
+
+
+def merge_vector_results_with_policy_df(vector_df: pd.DataFrame, policy_df: pd.DataFrame) -> pd.DataFrame:
+    if vector_df.empty or policy_df.empty:
+        return pd.DataFrame()
+
+    merged = vector_df.merge(
+        policy_df,
+        left_on="id",
+        right_on="announcement_id",
+        how="inner",
+        suffixes=("_vector", ""),
+    )
+    if "similarity" in merged.columns:
+        merged["score"] = merged["similarity"]
+    if "content_vector" in merged.columns and "content" not in merged.columns:
+        merged["content"] = merged["content_vector"]
+    return merged
+
+
+def generate_rag_chat_response(client, history: list[dict[str, Any]], top_df: pd.DataFrame) -> str:
+    if client is None:
+        return "Gemini API 키가 없어 추천 설명은 생략하고, 관련 정책 후보만 보여드릴게요."
+
+    context_lines = []
+    for _, row in top_df.head(5).iterrows():
+        context_lines.append(
+            "\n".join(
+                [
+                    f"제목: {row.get('title', '')}",
+                    f"지역: {row.get('region', '')}",
+                    f"기관: {row.get('provider', '')}",
+                    f"분야: {row.get('category', '')}",
+                    f"내용 요약: {row.get('content', row.get('summary', ''))}",
+                    f"상세 링크: {row.get('resolved_detail_url', row.get('detail_url', ''))}",
+                ]
+            )
+        )
+
+    conversation = "\n".join(
+        f"{'사용자' if message['role'] == 'user' else '챗봇'}: {message['content']}"
+        for message in history[-6:]
+    )
+
+    prompt = (
+        "너는 PolicyRec의 공고 추천 챗봇이다.\n"
+        "아래 후보 공고의 content를 바탕으로 사용자의 질문에 맞는 정책을 자연스럽게 요약해라.\n"
+        "모르는 내용은 지어내지 말고, 현재 보이는 후보 기준이라고 분명히 말해라.\n"
+        "답변은 짧은 요약 2~4문장 뒤에 핵심 후보를 bullet 없이 문장형으로 정리해라.\n\n"
+        f"[최근 대화]\n{conversation}\n\n"
+        f"[후보 공고]\n" + "\n\n".join(context_lines)
+    )
+
+    return _call_gemini(client, prompt) or "추천 설명을 만드는 중 문제가 생겨서, 관련 정책 후보만 먼저 보여드릴게요."
 
 
 def choose_chat_candidate_df(df: pd.DataFrame, saved_filters: dict[str, str], user_input: str) -> tuple[pd.DataFrame, str, str | None]:
@@ -708,7 +798,7 @@ def render_chat_history_block(history: list[dict[str, Any]]) -> None:
 
 
 @st.dialog("PolicyRec 챗봇", width="large", on_dismiss=on_chat_dialog_dismiss_app3_2)
-def chatbot_dialog_app3_2(df: pd.DataFrame, client, saved_filters: dict[str, str]) -> None:
+def chatbot_dialog_app3_2(df: pd.DataFrame, client, supabase_client: Client, saved_filters: dict[str, str]) -> None:
     history_key = "app3_2_chat_history"
     history = st.session_state[history_key]
     examples = build_personalized_examples(saved_filters)
@@ -753,10 +843,24 @@ def chatbot_dialog_app3_2(df: pd.DataFrame, client, saved_filters: dict[str, str
         elif candidate_df.empty:
             response_text = "조건에 맞는 정책을 찾지 못했어요. 지역이나 대상을 조금 넓혀보면 더 잘 찾을 수 있어요."
         else:
-            candidate_texts = tuple(candidate_df.apply(build_search_text, axis=1).tolist())
-            candidate_vectorizer, candidate_matrix = build_vectorizer(candidate_texts)
-            top_df = search_top5_tfidf(candidate_df, candidate_vectorizer, candidate_matrix, query_text)
-            top_df = rank_chat_results(top_df)
+            if client is None:
+                candidate_texts = tuple(candidate_df.apply(build_search_text, axis=1).tolist())
+                candidate_vectorizer, candidate_matrix = build_vectorizer(candidate_texts)
+                top_df = search_top5_tfidf(candidate_df, candidate_vectorizer, candidate_matrix, query_text)
+                top_df = rank_chat_results(top_df).head(5)
+                response_builder = "fallback"
+            else:
+                try:
+                    vector_df = search_similar_announcements(supabase_client, client, query_text, threshold=0.3, count=20)
+                    top_df = merge_vector_results_with_policy_df(vector_df, candidate_df)
+                    top_df = rank_chat_results(top_df).head(5)
+                    response_builder = "rag"
+                except Exception:
+                    candidate_texts = tuple(candidate_df.apply(build_search_text, axis=1).tolist())
+                    candidate_vectorizer, candidate_matrix = build_vectorizer(candidate_texts)
+                    top_df = search_top5_tfidf(candidate_df, candidate_vectorizer, candidate_matrix, query_text)
+                    top_df = rank_chat_results(top_df).head(5)
+                    response_builder = "fallback"
 
             if is_low_confidence(top_df):
                 response_text = "원하는 정책을 더 정확히 찾을 수 있도록 지역, 대상, 분야를 함께 적어주세요."
@@ -775,6 +879,7 @@ def chatbot_dialog_app3_2(df: pd.DataFrame, client, saved_filters: dict[str, str
                         "target_age": row.get("target_age", ""),
                         "end_date": format_date(row.get("apply_end")),
                         "dday_text": d_day_label(row.get("apply_end")),
+                        "content": row.get("content", ""),
                         "detail_url": row.get("detail_url", ""),
                         "resolved_detail_url": row.get("resolved_detail_url", row.get("detail_url", "")),
                         "detail_url_is_fallback": bool(row.get("detail_url_is_fallback", False)),
@@ -782,7 +887,10 @@ def chatbot_dialog_app3_2(df: pd.DataFrame, client, saved_filters: dict[str, str
                     for _, row in top_df.iterrows()
                 ]
                 with st.spinner("추천 내용을 정리하고 있어요..."):
-                    response_text = generate_chat_response(client, history, top_df)
+                    if response_builder == "rag":
+                        response_text = generate_rag_chat_response(client, history, top_df)
+                    else:
+                        response_text = generate_chat_response(client, history, top_df)
 
     history.append({"role": "assistant", "content": response_text, "policies": top_policies})
     st.rerun()
@@ -831,7 +939,7 @@ def main() -> None:
         st.stop()
 
     try:
-        get_supabase_client(supabase_url, supabase_key)
+        supabase_client = get_supabase_client(supabase_url, supabase_key)
         rows, total_count = fetch_supabase_rows(supabase_url, supabase_key, SUPABASE_TABLE)
     except Exception as exc:
         st.error("Supabase 데이터를 불러오는 중 오류가 발생했습니다.")
@@ -866,7 +974,7 @@ def main() -> None:
             st.rerun()
 
     if st.session_state.get("chat_open", False):
-        chatbot_dialog_app3_2(policy_df, client, st.session_state["app3_2_saved_filters"])
+        chatbot_dialog_app3_2(policy_df, client, supabase_client, st.session_state["app3_2_saved_filters"])
 
 
 if __name__ == "__main__":
