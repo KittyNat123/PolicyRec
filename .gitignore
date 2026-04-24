@@ -26,6 +26,10 @@ gitignore/
 *_kwon*
 *.gsheet*
 
+# app3_2 비회원 개인화 필터 저장 파일
+data/app/user_pref_demo.json
+
+
 
 .ipynb_checkpoints/
 .streamlit_app.log
