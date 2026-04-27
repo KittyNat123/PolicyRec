@@ -1,17 +1,18 @@
 """
-Normalize the latest raw API responses into one combined CSV file.
+최신 API 원본 응답 데이터를 정규화하여 하나의 CSV 파일로 병합합니다.
 
-The goal of this module is simple:
-1. Read the newest raw JSON file from each source.
-2. Map each source's field names into common columns.
-3. Save one easy-to-filter `combined.csv`.
+이 모듈의 핵심 역할은 다음과 같습니다:
+1. 각 데이터 출처(Source)에서 가장 최신 원본 JSON 파일을 읽어옵니다.
+2. 출처마다 제각각인 필드명을 공통 표준 컬럼명으로 통일(매핑)합니다.
+3. 데이터 필터링이 용이하도록 단일 `combined.csv` 파일로 저장합니다.
 
-We keep `raw_json` too, so we can always look back at the original item.
+단, 문제 발생 시 언제든 원본 항목을 역추적할 수 있도록 `raw_json` 데이터도 함께 보존합니다.
 """
 
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -380,13 +381,46 @@ def normalize_all_sources() -> pd.DataFrame:
     return pd.DataFrame(unique_records, columns=COMMON_COLUMNS)
 
 
-def save_combined_csv() -> Path:
-    ensure_dir(CLEAN_DIR)
+def save_combined_csv(
+    output_path: str | Path | None = None,
+    save_meta: bool = False,
+) -> Path:
+    """
+    인자:
+    - output_path: 결과 csv 저장 경로. None이면 기존 기본값(data/clean/combined.csv) 그대로.
+    - save_meta: True면 csv 옆에 *.meta.json 같이 저장 (생성시간/raw json 파일명/소스별 행수).
+    """
+    if save_meta:
+        source_files: dict[str, str | None] = {}
+        for source_name in ["biz", "kst", "youth"]:
+            latest = get_latest_raw_json_file(source_name)
+            source_files[source_name] = latest.name if latest else None
+
+    out = Path(output_path) if output_path else OUTPUT_CSV
+    ensure_dir(out.parent)
+
     dataframe = normalize_all_sources()
-    dataframe.to_csv(OUTPUT_CSV, index=False, encoding="utf-8-sig")
-    log("norm", f"saved combined csv: {OUTPUT_CSV}")
+    dataframe.to_csv(out, index=False, encoding="utf-8-sig")
+    log("norm", f"saved combined csv: {out}")
     log("norm", f"row count: {len(dataframe)}")
-    return OUTPUT_CSV
+
+    if save_meta:
+        rows_per_source = (
+            dataframe["source"].value_counts().to_dict() if "source" in dataframe.columns else {}
+        )
+        meta = {
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "output_csv": str(out),
+            "total_rows": int(len(dataframe)),
+            "rows_per_source": {k: int(v) for k, v in rows_per_source.items()},
+            "raw_json_files": source_files,
+        }
+        meta_path = out.parent / f"{out.stem}.meta.json"
+        with meta_path.open("w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        log("norm", f"saved meta: {meta_path}")
+
+    return out
 
 
 if __name__ == "__main__":

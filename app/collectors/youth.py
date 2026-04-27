@@ -43,6 +43,8 @@ YOUTHCENTER_URL = "https://www.youthcenter.go.kr/go/ythip/getPlcy"
 # 공식 문서의 요청 예시에 나온 파라미터 이름입니다.
 YOUTHCENTER_API_KEY_PARAM = "apiKeyNm"
 YOUTHCENTER_RETURN_TYPE_PARAM = "rtnType"
+YOUTHCENTER_PAGE_PARAM = "pageNum"
+YOUTHCENTER_PAGE_SIZE_PARAM = "pageSize"
 
 YOUTHCENTER_HEADERS = {
     "User-Agent": (
@@ -107,6 +109,8 @@ def fetch_youthcenter(page: int = 1, page_size: int = 10, force: bool = False) -
     params = {
         YOUTHCENTER_API_KEY_PARAM: api_key,
         YOUTHCENTER_RETURN_TYPE_PARAM: "json",
+        YOUTHCENTER_PAGE_PARAM: page,
+        YOUTHCENTER_PAGE_SIZE_PARAM: page_size,
     }
 
     try:

@@ -1,13 +1,13 @@
 """
-Helpers for finding, downloading, and previewing attachment files.
+첨부파일을 찾고, 다운로드하며, 미리보기(텍스트 추출)를 제공하는 도우미(Helper) 모듈입니다.
 
-The public sites often hide important eligibility details in detail pages or
-downloaded files. This module keeps the notebook simple by providing helpers
-that:
-1. read the latest raw API data,
-2. find candidate detail/download links,
-3. download the files,
-4. extract a short human-readable preview.
+공공기관 사이트들은 지원 자격과 같은 '진짜 중요한 핵심 정보'를 상세 페이지나 다운로드해야 하는 첨부파일(PDF, 한글 파일 등) 속에 숨겨두는 경우가 많습니다. 
+이 모듈은 메인 코드(노트북)가 지저분해지지 않도록, 다음 4가지 핵심 작업을 대신 처리해 주는 도우미 역할을 합니다.
+
+1. 가장 최신의 원본 API 데이터를 읽어옵니다.
+2. 데이터 안에서 상세 페이지나 첨부파일 다운로드 링크를 싹 다 찾아냅니다.
+3. 해당 파일들을 실제로 다운로드합니다.
+4. 다운받은 파일에서 사람이(혹은 AI가) 읽기 좋게 짧은 텍스트 형태의 '미리보기(요약본)'를 추출해 냅니다.
 """
 
 from __future__ import annotations

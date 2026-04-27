@@ -59,6 +59,12 @@ def parse_args() -> argparse.Namespace:
         help="한 번에 가져올 개수입니다. 기본값은 10 입니다.",
     )
     parser.add_argument(
+        "--count",
+        type=int,
+        default=None,
+        help="--page-size와 같은 의미의 더 직관적인 별칭입니다. 값이 있으면 --page-size보다 우선합니다.",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="기존 캐시가 있어도 다시 API 를 호출합니다.",
@@ -109,16 +115,17 @@ def main() -> int:
     """
     args = parse_args()
     results: list[dict] = []
+    effective_page_size = args.count if args.count is not None else args.page_size
 
     fetch_functions = {
-        "biz": lambda: fetch_bizinfo(page=args.page, page_size=args.page_size, force=args.force),
-        "kst": lambda: fetch_kstartup(page=args.page, page_size=args.page_size, force=args.force),
-        "youth": lambda: fetch_youthcenter(page=args.page, page_size=args.page_size, force=args.force),
+        "biz": lambda: fetch_bizinfo(page=args.page, page_size=effective_page_size, force=args.force),
+        "kst": lambda: fetch_kstartup(page=args.page, page_size=effective_page_size, force=args.force),
+        "youth": lambda: fetch_youthcenter(page=args.page, page_size=effective_page_size, force=args.force),
     }
 
     print("PolicyRec 수집을 시작합니다.")
     print(f"실행 대상 source: {', '.join(args.sources)}")
-    print(f"page={args.page}, page_size={args.page_size}, force={args.force}")
+    print(f"page={args.page}, page_size={effective_page_size}, force={args.force}")
 
     for source_name in args.sources:
         print(f"\n--- {source_name} 수집 시작 ---")

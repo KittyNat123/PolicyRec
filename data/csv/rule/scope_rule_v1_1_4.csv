@@ -1,0 +1,3 @@
+﻿scope,의미
+main,대표 공고. 서비스 노출 후보
+other,main 외. 자세한 사유는 _scope_reason 참조
