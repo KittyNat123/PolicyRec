@@ -43,7 +43,6 @@ data/raw/*.json      app/norm.py         PolicyRec_v1_1_6.ipynb
 > **`source_file` / `source_row_number` 부재 이유**
 > v1.0 노트북에서는 각 row에 `_source_file`(파일 경로), `_source_row_number`(행 번호)를 직접 생성했다.
 > v1.1.x에서 norm.py로 리팩토링할 때 이 두 컬럼이 제거되고, 대신 `raw_json`(원본 JSON 전체)을 각 row에 저장하는 방식으로 바뀌었다.
-> 원본 **내용** 추적은 `raw_json`으로 가능. **수집 배치(날짜)** 추적이 필요하면 norm.py의 `normalize_*_payload()` 안에 `record["source_file"] = raw_path.name` 한 줄 추가 후 `schema.py` COMMON_COLUMNS에도 포함하면 된다.
 
 ---
 
