@@ -11,6 +11,70 @@ PolicyRec — 청년지원사업 통합 추천 AI 프로젝트의 변경 이력.
 
 ---
 
+## [1.1.6] - 2026-04-28
+
+### Added
+- `target_age_min` / `target_age_max` 파싱 로직 보강 — 0/99 → NULL 처리 (API 기본값 구분)
+- 자동 dedupe 강화: URL exact + 제목 일치 → `duplicate_url`, 제목+기관+기간 100% 일치 → `duplicate_exact` 자동 other 처리
+- 자매 공고 분리: dedupe_key 같은데 제목 다른 경우 → review CSV로 별도 출력
+- 컬럼 추가: `target_detail`, `additional_conditions`, `required_documents`, `application_method`
+- `subcategory` 컬럼 main CSV에 보존 (원본 중분류)
+
+### Changed
+- 카테고리 룰표 v2 (`cat_rule_v1_1_6.csv`): civic 처리 보강, 위험 키워드 제거
+- 스코프 룰표 v2 (`scope_rule_v1_1_6.csv`): priority 순위 적용
+- raw 600건 → dedupe 후 main 554건
+
+### Fixed
+- Backlog #3 중복 처리 → 자동 dedupe로 해결
+- Backlog #5 biz target_age 0/99 → NULL로 처리하여 "제한 없음" 명확히 구분
+
+### 산출물
+- 노트북: `PolicyRec_v1_1_6.ipynb`
+- CSV: `data/csv/main/main_v1_1_6.csv` (554건, 28컬럼)
+- 룰표: `cat_rule_v1_1_6.csv`, `scope_rule_v1_1_6.csv`
+
+---
+
+## [1.1.5] - 2026-04-xx
+
+### Changed
+- `raw_` 접두어 컬럼 전면 제거 → 최종 컬럼명으로 정리
+  - `raw_target_group` → `target_group`, `raw_target_age` → `target_age` 등
+  - `raw_period_text` 제거 (apply_start / apply_end 분리 사용)
+- dedupe 결과: civic_participation 34건 + duplicate_exact 8건 + duplicate_url 4건 → 46건 other 처리
+- 600건 → 554건 (v1.1.4 대비 14건 추가 제거)
+
+### 산출물
+- 노트북: `PolicyRec_v1_1_5.ipynb`
+- CSV: `data/csv/main/main_v1_1_5.csv` (554건, 26컬럼)
+
+---
+
+## [1.1.4] - 2026-04-xx
+
+### Added
+- `s_category` 컬럼 — 서비스용 표준 카테고리 (`cat_rule_v1_1_4.csv` 룰표로 매핑)
+- `_scope` / `_scope_reason` — 공고 적재 여부 판단 컬럼
+- `norm_title` / `norm_provider` / `norm_period` / `norm_detail_url` — dedupe 비교용 정규화 컬럼
+- `_dedupe_key` — 제목+기관+기간 합본 중복 탐지 키
+- scope_rule CSV 도입 (`scope_rule_v1_1_4.csv`)
+
+### Changed
+- 대상 컬럼에 `raw_` 접두어 임시 부여 (v1.1.5에서 제거)
+  - `target_group` → `raw_target_group`, `target_age` → `raw_target_age` 등
+- `provider`: `supervising_agency` 우선, 없으면 `operating_agency`로 통합
+- 600건 → 568건 (dedupe 처리)
+
+### Fixed
+- Backlog #8 category 체계 통일 → `s_category` + cat_rule로 source별 분류 통합
+
+### 산출물
+- 노트북: `PolicyRec_v1_1_4.ipynb`
+- CSV: `data/csv/main/main_v1_1_4.csv` (568건, 25컬럼)
+
+---
+
 ## [1.1.3] - 2026-04-23
 
 ### Added
@@ -120,7 +184,10 @@ v1.1    : 13컬럼 (source, source_id, title, summary, category, benefit_type,
                    region, target_group, target_age_min/max, start_date, end_date, detail_url)
 v1.1.1  : 14컬럼 (-benefit_type, +provider, +region_code)
 v1.1.2  : 13컬럼 (-region_code)
-v1.1.3  : 13컬럼 (스키마 변경 없음, region/category 값 정규화 핫픽스)  ← 현재
+v1.1.3  : 13컬럼 (스키마 변경 없음, region/category 값 정규화 핫픽스)
+v1.1.4  : 25컬럼 — +s_category, +_scope, +norm_*, +_dedupe_key / 컬럼에 raw_ 접두어 임시 부여 / 568건
+v1.1.5  : 26컬럼 — raw_ 접두어 전면 제거, raw_period_text 삭제 / 554건
+v1.1.6  : 28컬럼 — +target_age_min, +target_age_max (Int64 nullable) / 554건  ← 현재
 ```
 
 ---
@@ -133,17 +200,18 @@ v1.1.3  : 13컬럼 (스키마 변경 없음, region/category 값 정규화 핫�
 | :--- | :--- | :--- | :--- |
 | 1 | benefit_type 복원 | 데이터 분류 체계(대출, 보조금, 교육 등) 및 자동 분류 알고리즘 구축 | API 항목 없어 별도 작업 필요 |
 | 2 | 추후공지 표준화 | `추후공지` 상태 값의 표준 포맷 결정 | 모집완료 시기의 다양한 표현 통일 |
-| 3 | 중복 처리 로직 | 공고 중복 식별 기준(ID/Title) 및 source 정보 병합 전략 | 잘못된 중복처리 무결성 문제 |
+| 3 | ~~중복 처리 로직~~ | ~~공고 중복 식별 기준(ID/Title) 및 source 정보 병합 전략~~ | **v1.1.6 해결** — 자동 dedupe 도입 |
 | 4 | provider 필터링 | provider 기준 필터링시 추가 정규화 | "중소벤처기업부" vs "중소벤처기업부장관" 표기 차이 |
-| 5 | biz target_age | 0~99 표기의 한계 해결 | "연령 제한 없음"과 "정보 수집 안 됨" 구별 불가 |
+| 5 | ~~biz target_age~~ | ~~0~99 표기의 한계 해결~~ | **v1.1.6 해결** — NULL = 제한 없음으로 처리 |
 | 6 | Youth target_group 결측 | summary 자연어에서 대상 정보 추출 | API 구조적 한계 / LLM 추출 필요 (v1.4) |
 | 7 | Summary 구조화 정보 추출 | `plcySprtCn` 자연어에서 "대상: 18~40세" 등 구조화 | RAG 품질 향상 및 필터 확장 (v1.4) |
-| 8 | **category 체계 통일** | **source별로 다른 분류 축을 공통 택소노미로 재편** | **biz=사업분야 / kst=창업단계 / youth=생활영역으로 필터 축이 달라 통합 필터 불가** |
+| 8 | ~~**category 체계 통일**~~ | ~~**source별로 다른 분류 축을 공통 택소노미로 재편**~~ | **v1.1.4 해결** — `s_category` + cat_rule 룰표로 통합 |
 
 ---
 
 ## 📋 로드맵
 
-- **v1.2** — SQLite DB + Chroma 임베딩 인덱스 구축
-- **v1.3** — 공고 첨부파일(PDF/HWP) 본문 추가, 시군구 단위 매핑
-- **v1.4** — Gemma 등 LLM 기반 RAG 추천, summary 자연어 구조화
+- **v1.2.x** — Supabase + Gemini 임베딩 적재 파이프라인 (진행 중)
+- **v1.3** — Hybrid Search 검증 (SQL 하드 필터 + 벡터 유사도 결합)
+- **v1.4** — LLM 기반 `target_tags` 추출 + 추천 이유 자연어 생성
+- **v2.0** — 첨부파일 PDF/HWP 본문 RAG 확장
