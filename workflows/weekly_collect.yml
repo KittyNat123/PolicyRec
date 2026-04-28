@@ -2,31 +2,27 @@ name: Weekly PolicyRec Data Collection
 
 on:
   schedule:
-    - cron: '0 21 * * 0'  # 매주 월요일 오전 6시 KST (UTC+9 → UTC 21:00 일요일)
-  workflow_dispatch:        # 수동 실행 버튼 (테스트용)
+    - cron: '0 21 * * 0'
+  workflow_dispatch:
 
 jobs:
   collect-and-normalize:
     runs-on: ubuntu-latest
 
     steps:
-      # ── 1. 저장소 체크아웃 ──────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Python 셋업 ──────────────────────────────────────
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
-      # ── 3. 의존성 설치 ──────────────────────────────────────
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # ── 4. API 수집 (3개 사이트) ────────────────────────────
-      - name: Fetch raw data (biz / kst / youth)
+      - name: Fetch raw data
         env:
           BIZINFO_API_KEY: ${{ secrets.BIZINFO_API_KEY }}
           KSTARTUP_API_KEY: ${{ secrets.KSTARTUP_API_KEY }}
@@ -38,8 +34,7 @@ jobs:
             --page-size 200 \
             --force
 
-      # ── 5. 정규화 파이프라인 실행 (v1.1.6) ──────────────────
-      - name: Run normalization pipeline (v1.1.6)
+      - name: Run normalization pipeline
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
@@ -50,10 +45,9 @@ jobs:
             --inplace \
             notebooks/PolicyRec_v1_1_6.ipynb
 
-      # ── 6. 결과물 커밋 & 푸시 ──────────────────────────────
       - name: Commit and push updated data
         run: |
-          git config user.name  "github-actions[bot]"
+          git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/csv/raw/ data/csv/main/
           git diff --cached --quiet || git commit -m "chore: weekly data update $(date +'%Y-%m-%d')"
