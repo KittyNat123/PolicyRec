@@ -1,0 +1,7 @@
+﻿단계,행수,설명
+0_raw,600,3개 소스 통합 raw csv
+1_after_category,600,s_category 라벨 부여
+2_main,568,main scope 행수 (강한 신호 dedupe 반영)
+3_other_url,32,URL exact match로 other 처리된 행수
+4_dup_weak_cand,22,_dedupe_key 약한 후보 행수 (검토 대상)
+5_main_final,568,main csv 최종 행수

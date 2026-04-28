@@ -1,0 +1,13 @@
+{
+  "main_version": "v1_1_4",
+  "category_rule": "cat_rule_v1_1_4.csv",
+  "scope_rule": "scope_rule_v1_1_4.csv",
+  "row_count": 568,
+  "sources": {
+    "biz": 200,
+    "kst": 200,
+    "youth": 168
+  },
+  "generated_by": "PolicyRec_v1_1_4.ipynb",
+  "note": "200건 PoC 기준. 룰은 별도 csv 로 관리. supabase 적재용 기준표."
+}

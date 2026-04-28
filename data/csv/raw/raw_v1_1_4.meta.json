@@ -1,0 +1,15 @@
+{
+  "generated_at": "2026-04-28T07:52:40",
+  "output_csv": "c:\\Users\\CY2\\github\\policyrec\\PolicyRec\\data\\csv\\raw\\raw_v1_1_4.csv",
+  "total_rows": 600,
+  "rows_per_source": {
+    "biz": 200,
+    "kst": 200,
+    "youth": 200
+  },
+  "raw_json_files": {
+    "biz": "bizinfo_page1_size200_20260428_075239.json",
+    "kst": "kstartup_page1_size200_20260428_075239.json",
+    "youth": "youthcenter_page1_size200_20260428_075240.json"
+  }
+}
