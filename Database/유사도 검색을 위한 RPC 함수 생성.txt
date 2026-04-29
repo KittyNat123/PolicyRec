@@ -1,4 +1,5 @@
 -- 유사도 검색을 위한 RPC 함수 생성
+-- 참고: 최신 기준은 RPC_match_announcements_hybrid_v1.sql 입니다.
 CREATE OR REPLACE FUNCTION match_announcements (
   query_embedding vector(768),
   match_threshold float,
@@ -6,7 +7,7 @@ CREATE OR REPLACE FUNCTION match_announcements (
 )
 RETURNS TABLE (
   id bigint,
-  raw_title text,         -- norm_title 대신 raw_title로 변경
+  title text,
   content text,
   s_category text,        -- 테이블 정의서에 맞게 s_category로 유지
   region text,
@@ -19,7 +20,7 @@ BEGIN
   RETURN QUERY
   SELECT
     announcements.id,
-    announcements.raw_title, -- 원본 제목 필드 참조
+    announcements.title,
     announcements.content,
     announcements.s_category,
     announcements.region,

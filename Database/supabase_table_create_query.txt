@@ -27,7 +27,7 @@ CREATE TABLE announcements (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   source TEXT NOT NULL,                   -- 사이트 구분 (youth, kst, biz)
   source_id TEXT NOT NULL,                -- 원본 고유 ID
-  raw_title TEXT,                         -- 원본 제목
+  title TEXT,                             -- 공고 제목
   summary TEXT,                           -- 요약 내용
   provider TEXT,                          -- 제공 기관
   norm_title TEXT,                        -- 정규화된 제목

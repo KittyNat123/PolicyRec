@@ -4,9 +4,11 @@
 
 **역할:** 사용자 식별 및 개인화의 시작점
 
-- `user_account_id`  
-  - 내부 시스템용 고유 ID (PK)  
-  - 모든 테이블 연결 기준
+- `user_account_id` (☑️수정됨)  
+  - 내부 시스템용 고유 ID (PK)
+  - 장기적으로 사용자 관련 테이블의 연결 기준으로 사용하는 것을 권장
+  - 단, 현재 MVP SQL 스키마에서는 `scraps`, `user_filters`, `chat_history`가 `login_id`를 FK로 사용한다
+  - 따라서 현재 MVP 구현과 쿼리는 `login_id` 기준으로 맞춘다
 
 - `login_id`  
   - 사용자 로그인 계정명  
@@ -27,8 +29,11 @@
   - 텍스트를 벡터화한 768차원 데이터 (Gemini 생성)  
   - 유사도 검색, 추천, 챗봇 RAG의 핵심
 
-- unique_source_item 유니크키 제약조건
-  - 중복 방지: 수집_출처와 원본_고유_ID 조합(source_id + source_name)을 유니크 제약조건으로 설정하여 중복 수집을 방지
+- `unique_source_item` 유니크키 제약조건 (☑️수정됨)  
+  - 중복 방지 기준은 `announcements(source, source_id)` 조합이다
+  - `source`는 수집 출처(`biz`, `kst`, `youth`)이고, `source_id`는 원본 API의 고유 ID이다
+  - 현재 DB 스키마에는 `source_name` 컬럼이 없다
+
 
 👉 텍스트 → 벡터 → 유사도 기반 검색 구조
 
