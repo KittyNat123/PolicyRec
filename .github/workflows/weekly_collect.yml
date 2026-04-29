@@ -32,7 +32,13 @@ jobs:
             --sources biz kst youth \
             --page 1 \
             --page-size 200 \
-            --force
+            --force \
+            --normalize
+
+      - name: Copy combined csv to pipeline input
+        run: |
+          mkdir -p data/csv/raw
+          cp data/clean/combined.csv data/csv/raw/raw_v1_1_6.csv
 
       - name: Rename raw files to auto prefix
         run: |
