@@ -34,10 +34,15 @@ data/raw/*.json      app/norm.py         PolicyRec_v1_1_6.ipynb
 | 단계 | 파일 | 역할 |
 | :--- | :--- | :--- |
 | API 원본 | `data/raw/{biz\|kst\|youth}/*.json` | 각 API 응답 원본 |
+| raw CSV | `data/csv/raw/raw_v1_1_6.csv` | norm.py 정규화 후 600건 전체. `raw_json` 컬럼으로 row-level 원본 추적 가능 |
 | category 룰 | `data/csv/rule/cat_rule_v1_1_6.csv` | `(source, raw_category) → s_category` 매핑 |
 | scope 룰 | `data/csv/rule/scope_rule_v1_1_6.csv` | main / other 판단 룰 (priority 순) |
 | **main CSV** | `data/csv/main/main_v1_1_6.csv` | **임베딩 입력용 최종 CSV** (554건) |
 | review CSV | `data/csv/review/review_queue_v1_1_6.csv` | 자매 공고 수동 검토 큐 (해당 건 있을 때만 생성) |
+
+> **`source_file` / `source_row_number` 부재 이유**
+> v1.0 노트북에서는 각 row에 `_source_file`(파일 경로), `_source_row_number`(행 번호)를 직접 생성했다.
+> v1.1.x에서 norm.py로 리팩토링할 때 이 두 컬럼이 제거되고, 대신 `raw_json`(원본 JSON 전체)을 각 row에 저장하는 방식으로 바뀌었다.
 
 ---
 
