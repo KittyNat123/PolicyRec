@@ -43,7 +43,7 @@ jobs:
             --to notebook \
             --execute \
             --inplace \
-            notebooks/PolicyRec_v1_1_6.ipynb
+            PolicyRec_v1_1_6.ipynb
 
       - name: Commit and push updated data
         run: |
