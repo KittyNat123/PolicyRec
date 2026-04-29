@@ -1,0 +1,33 @@
+-- 유사도 검색을 위한 RPC 함수 생성
+create or replace function match_announcements (
+  query_embedding vector(768),
+  match_threshold float,
+  match_count int
+)
+returns table (
+  id bigint,
+  title text,
+  content text,
+  category text,
+  region text,
+  detail_url text,
+  similarity float
+)
+language plpgsql
+as $$
+begin
+  return query
+  select
+    announcements.id,
+    announcements.title,
+    announcements.content,
+    announcements.category,
+    announcements.region,
+    announcements.detail_url,
+    1 - (announcements.embedding <=> query_embedding) as similarity
+  from announcements
+  where 1 - (announcements.embedding <=> query_embedding) > match_threshold
+  order by announcements.embedding <=> query_embedding
+  limit match_count;
+end;
+$$;

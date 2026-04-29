@@ -1,0 +1,109 @@
+-- 0. 벡터 검색 기능을 활성화합니다.
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- 1. 사용자 계정 테이블 (인증 핵심)
+CREATE TABLE users (
+  user_account_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  login_id VARCHAR UNIQUE NOT NULL,
+  email VARCHAR UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  role TEXT DEFAULT 'user',
+  created_dt TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 2. 사용자 상세 정보 테이블 (1:1 관계)
+CREATE TABLE user_info (
+  login_id VARCHAR PRIMARY KEY REFERENCES users(login_id) ON DELETE CASCADE,
+  nickname VARCHAR,
+  age_group TEXT,
+  is_enterprise BOOLEAN DEFAULT FALSE,
+  regions TEXT[],               -- 관심 지역 배열
+  categories TEXT[],            -- 관심 분야 배열
+  interest_keywords TEXT[],      -- 관심 키워드 배열
+  updated_dt TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 3. 통합 공고 테이블 (RAG 엔진 핵심)
+CREATE TABLE announcements (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  source TEXT NOT NULL,                   -- 사이트 구분 (youth, kst, biz)
+  source_id TEXT NOT NULL,                -- 원본 고유 ID
+  raw_title TEXT,                         -- 원본 제목
+  summary TEXT,                           -- 요약 내용
+  provider TEXT,                          -- 제공 기관
+  norm_title TEXT,                        -- 정규화된 제목
+  norm_provider TEXT,                     -- 정규화된 제공기관
+  norm_period TEXT,                       -- 정규화된 일정
+  s_category TEXT,                        -- 정규화 카테고리
+  region TEXT,                            -- 지역
+  target_age_min INT DEFAULT 0,
+  target_age_max INT DEFAULT 99,
+  apply_start_dt TIMESTAMP WITH TIME ZONE,
+  apply_end_dt TIMESTAMP WITH TIME ZONE,
+  target_group TEXT,
+  -- support_target TEXT[],                  -- 타겟 태그 배열 (청년, 대학생 등). 주석처리
+  detail_url TEXT,
+  _scope TEXT,
+  _scope_reason TEXT,
+  content TEXT,                           -- 임베딩용 통합 텍스트
+  embedding VECTOR(768),                  -- Gemini 768차원 벡터
+  created_dt TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_dt TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  
+  -- 동일 출처의 중복 데이터 방지
+  CONSTRAINT unique_source_item UNIQUE (source, source_id)
+);
+
+-- 4. API 배치 로그 테이블 (관리용)
+CREATE TABLE api_batch_logs (
+  log_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  source TEXT NOT NULL,                   -- 수집 출처
+  status TEXT,                            -- SUCCESS, FAIL
+  total_count INT DEFAULT 0,              -- 수집 시도 개수
+  inserted_count INT DEFAULT 0,           -- 실제 적재 개수
+  error_message TEXT,                     -- 에러 로그
+  execution_time_ms INT,                  -- 소요 시간
+  created_dt TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 5. 스크랩 테이블
+CREATE TABLE scraps (
+  scrap_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  login_id VARCHAR REFERENCES users(login_id) ON DELETE CASCADE,
+  ann_id BIGINT REFERENCES announcements(id) ON DELETE CASCADE,
+  created_dt TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 6. 사용자 맞춤 필터 테이블
+CREATE TABLE user_filters (
+  filter_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  login_id VARCHAR REFERENCES users(login_id) ON DELETE CASCADE,
+  filter_name TEXT,                       -- 필터 별칭
+  regions TEXT[],
+  categories TEXT[],
+  target_age INT,
+  is_active_only BOOLEAN DEFAULT TRUE,    -- 진행 중 공고만 보기 여부
+  created_dt TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 7. 챗봇 대화 기록 테이블
+CREATE TABLE chat_history (
+  chat_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  login_id VARCHAR REFERENCES users(login_id) ON DELETE CASCADE,
+  user_query TEXT,                        -- 사용자 질문
+  ai_response TEXT,                       -- AI 답변
+  query_embedding VECTOR(768),            -- 질문 벡터 (관심사 분석용)
+  created_dt TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 공고 검색 최적화 (지역, 나이, 카테고리)
+CREATE INDEX idx_ann_search ON announcements (region, target_age_min, target_age_max, s_category);
+
+-- 마감일 기준 정렬 최적화
+CREATE INDEX idx_ann_apply_end_dt ON announcements (apply_end_dt DESC);
+
+-- 로그 조회 최적화
+CREATE INDEX idx_batch_log_date ON api_batch_logs (created_dt DESC);
+
+-- 챗봇 히스토리 조회 최적화
+CREATE INDEX idx_chat_login_date ON chat_history (login_id, created_dt DESC);
