@@ -57,9 +57,10 @@ jobs:
             --inplace \
             PolicyRec_v1_1_6.ipynb
 
-      - name: Rename output csv to auto prefix
+      - name: Rename output csv to auto prefix with date
         run: |
-          [ -f data/csv/main/main_v1_1_6.csv ] &&             mv data/csv/main/main_v1_1_6.csv data/csv/main/auto_main_v1_1_6.csv
+          [ -f data/csv/main/main_v1_1_6.csv ] && \
+            mv data/csv/main/main_v1_1_6.csv data/csv/main/auto_main_v1_1_6_$(date +'%Y%m%d').csv
 
       - name: Commit and push updated data
         run: |
