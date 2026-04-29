@@ -5,6 +5,12 @@ on:
     - cron: '0 21 * * 0'
   workflow_dispatch:
 
+env:
+  # ====================================================
+  # 버전 관리: 노트북 업그레이드 시 여기 한 줄만 수정
+  # ====================================================
+  PIPELINE_VERSION: v1_1_7
+
 jobs:
   collect-and-normalize:
     runs-on: ubuntu-latest
@@ -38,7 +44,7 @@ jobs:
       - name: Copy combined csv to pipeline input
         run: |
           mkdir -p data/csv/raw
-          cp data/clean/combined.csv data/csv/raw/raw_v1_1_6.csv
+          cp data/clean/combined.csv data/csv/raw/raw_${PIPELINE_VERSION}.csv
 
       - name: Rename raw files to auto prefix
         run: |
@@ -55,13 +61,14 @@ jobs:
             --to notebook \
             --execute \
             --inplace \
-            PolicyRec_v1_1_6.ipynb
+            PolicyRec_${PIPELINE_VERSION}.ipynb
 
       - name: Copy output csv to auto prefix files
         run: |
-          if [ -f data/csv/main/main_v1_1_6.csv ]; then
-            cp data/csv/main/main_v1_1_6.csv data/csv/main/auto_main_v1_1_6.csv
-            cp data/csv/main/main_v1_1_6.csv data/csv/main/auto_main_v1_1_6_$(date +'%Y%m%d').csv
+          MAIN_CSV="data/csv/main/main_${PIPELINE_VERSION}.csv"
+          if [ -f "$MAIN_CSV" ]; then
+            cp "$MAIN_CSV" "data/csv/main/auto_main_${PIPELINE_VERSION}.csv"
+            cp "$MAIN_CSV" "data/csv/main/auto_main_${PIPELINE_VERSION}_$(date +'%Y%m%d').csv"
           fi
 
       - name: Commit and push updated data
@@ -69,5 +76,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/
-          git diff --cached --quiet || git commit -m "chore: weekly data update $(date +'%Y-%m-%d')"
+          git diff --cached --quiet || git commit -m "chore: weekly data update $(date +'%Y-%m-%d') [${PIPELINE_VERSION}]"
           git push
