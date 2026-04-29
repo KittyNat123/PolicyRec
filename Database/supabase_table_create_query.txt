@@ -16,7 +16,6 @@ CREATE TABLE user_info (
   login_id VARCHAR PRIMARY KEY REFERENCES users(login_id) ON DELETE CASCADE,
   nickname VARCHAR,
   age_group TEXT,
-  is_enterprise BOOLEAN DEFAULT FALSE,
   regions TEXT[],               -- 관심 지역 배열
   categories TEXT[],            -- 관심 분야 배열
   interest_keywords TEXT[],      -- 관심 키워드 배열
@@ -36,12 +35,11 @@ CREATE TABLE announcements (
   norm_period TEXT,                       -- 정규화된 일정
   s_category TEXT,                        -- 정규화 카테고리
   region TEXT,                            -- 지역
-  target_age_min INT DEFAULT 0,
-  target_age_max INT DEFAULT 99,
+  target_age_min INT,
+  target_age_max INT,
   apply_start_dt TIMESTAMP WITH TIME ZONE,
   apply_end_dt TIMESTAMP WITH TIME ZONE,
   target_group TEXT,
-  -- support_target TEXT[],                  -- 타겟 태그 배열 (청년, 대학생 등). 주석처리
   detail_url TEXT,
   _scope TEXT,
   _scope_reason TEXT,
@@ -82,7 +80,6 @@ CREATE TABLE user_filters (
   regions TEXT[],
   categories TEXT[],
   target_age INT,
-  is_active_only BOOLEAN DEFAULT TRUE,    -- 진행 중 공고만 보기 여부
   created_dt TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
