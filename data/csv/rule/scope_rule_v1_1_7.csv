@@ -1,0 +1,47 @@
+rule_id,scope,scope_reason,match_field,match_type,pattern,priority,note
+# ==================================================================
+# 스코프 룰표 v2 (PolicyRec v1.1.4 검증 결과 반영)
+# ==================================================================
+# 변경 사항 (v1 → v2):
+#
+# [추가]
+#   - 'youth 참여･기반' 카테고리 자동 other (29건 일괄 처리)
+#   - 중복 카테고리 표기도 같이 처리 (참여･기반,참여･기반)
+#
+# [제거 - 위험 키워드]
+#   - '경진대회': 11건 전부 창업/사업화 지원 → 키워드 제거
+#   - '박람회': 1건 사업화 지원 → 제거
+#   - '페스티벌' 단독: biz는 사업화 행사 → 제거
+#   - '서포터즈' 단독: 카테고리에 따라 다름 → 제거
+#   - '포럼': 데이터에 없어 검증 불가 → 일단 제거
+#   - '캠페인': 데이터에 없어 검증 불가 → 제거
+#
+# [축소 - civic 키워드]
+#   - 카테고리 룰로 대부분 처리되므로 키워드는 보강용으로만 최소 유지
+#   - 'youth 외'에서 등장할 수 있는 위원회/협의체만 남김
+#
+# 적용 결과 예상 (568건 main 기준):
+#   - 카테고리 룰: youth 참여･기반 29건 → other (civic_participation)
+#   - 키워드 룰: 거의 0건 (이미 카테고리로 처리됨)
+#   - dedupe 룰: 11그룹 분류 (자동 7 + review 4)
+# ==================================================================
+
+# === Priority 1: 카테고리 기반 자동 분류 ===
+# 가장 안전하고 효과적. 키워드 매칭보다 우선.
+R01,other,civic_participation,s_category,category,참여/기반,1,청년 참여형 카테고리 (youth 참여･기반 → 일괄 처리)
+
+# === Priority 2: 보강용 키워드 (카테고리로 못 잡는 케이스 대비) ===
+# youth 외 source에서 청년 참여형이 등장할 가능성 대비
+R10,other,civic_participation,title,keyword,청년참여위원회,2,청년 참여 위원회 (youth 외 source)
+R11,other,civic_participation,title,keyword,청년주권회의,2,청년 주권회의
+R12,other,civic_participation,title,keyword,청년원탁회의,2,청년 원탁회의
+R13,other,civic_participation,title,keyword,청년의회,2,청년 의회
+R14,other,civic_participation,title,keyword,정책협의체,2,정책 협의체
+
+# === Priority 3: dedupe 자동 처리 (별도 노트북에서 처리) ===
+# R30,other,duplicate_url,_,_,_,3,동일 detail_url (팀원 노트북에서 처리됨)
+# R31,other,duplicate_exact,_,_,_,3,제목+기관+기간 100% 동일 (자동 merge)
+# R32,_,review_pending,_,_,_,3,자매 공고 등 검토 필요 (review 큐로)
+
+# === 기본값 ===
+# 위 룰에 매칭되지 않으면 scope=main, scope_reason=primary
