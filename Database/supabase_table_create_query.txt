@@ -40,6 +40,7 @@ CREATE TABLE announcements (
   apply_start_dt TIMESTAMP WITH TIME ZONE,
   apply_end_dt TIMESTAMP WITH TIME ZONE,
   target_group TEXT,
+  target_tags TEXT[],
   detail_url TEXT,
   _scope TEXT,
   _scope_reason TEXT,
