@@ -42,6 +42,7 @@ CREATE TABLE announcements (
   target_group TEXT,
   target_tags TEXT[],
   detail_url TEXT,
+  support_type TEXT,
   _scope TEXT,
   _scope_reason TEXT,
   content TEXT,                           -- 임베딩용 통합 텍스트
