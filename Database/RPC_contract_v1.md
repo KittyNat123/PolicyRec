@@ -61,6 +61,8 @@ Next.js 검색 API와 챗봇/RAG 로직이 Supabase RPC를 호출할 때 사용�
 | apply_start_dt | 신청 시작일 |
 | apply_end_dt | 신청 종료일 |
 | target_group | 대상 |
+| support_type | 지원 내용 (현금지원, 공간지원 등) |
+| target_tags | 대상 핵심 태그 리스트 |
 | detail_url | 상세 URL |
 | similarity | embedding 유사도 |
 
@@ -127,5 +129,7 @@ export function getPolicyStatus(applyEndDt: string | null) {
 | apply_end | apply_end_dt |
 | target_age_min | target_age_min |
 | target_age_max | target_age_max |
+| support_type | support_type |
+| target_tags | target_tags |
 
 주의: CSV의 `category`는 원 API 카테고리이므로 서비스 필터에는 사용하지 않는다.

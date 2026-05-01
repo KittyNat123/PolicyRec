@@ -20,6 +20,8 @@ RETURNS TABLE (
   apply_start_dt timestamptz,
   apply_end_dt timestamptz,
   target_group text,
+  target_tags text[],
+  support_type text,
   detail_url text,
   similarity float
 )
@@ -41,6 +43,8 @@ BEGIN
     a.apply_start_dt,
     a.apply_end_dt,
     a.target_group,
+    a.target_tags,
+    a.support_type,
     a.detail_url,
     1 - (a.embedding <=> query_embedding) AS similarity
   FROM announcements a
