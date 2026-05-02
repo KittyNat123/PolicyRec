@@ -1,10 +1,10 @@
-# 기업마당(Bizinfo) 공공데이터포털 또는 기업마당에서 발급받은 API 키
+# 기업마당(Bizinfo) 또는 공공데이터포털 API 키
 BIZINFO_API_KEY=
 
-# K-Startup(창업진흥원) 에서 발급받은 API 키
+# K-Startup(창업진흥원) API 키
 KSTARTUP_API_KEY=
 
-# 온통청년(Youthcenter) 에서 발급받은 API 키
+# 온통청년(Youthcenter) API 키
 YOUTHCENTER_API_KEY=
 
 # Google AI Studio
