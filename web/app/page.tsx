@@ -11,15 +11,9 @@
 
 import Image from "next/image";
 import { useCallback, useEffect, useState } from "react";
-import {
-  formatDate,
-  dDayLabel,
-  recruitmentStatus,
-  getSourceBadge,
-  STATUS_BADGE_STYLES,
-  formatTargetAgeRange,
-  type RecruitmentStatus,
-} from "@/lib/utils";
+import { PolicyCard } from "@/components/PolicyCard";
+import { recruitmentStatus, type RecruitmentStatus } from "@/lib/utils";
+import type { ChatMessage, SavedFilter, SearchResult, User } from "@/lib/types";
 
 const ALL = "전체";
 
@@ -69,46 +63,7 @@ const STATUSES: (RecruitmentStatus | typeof ALL)[] = [
   "상시",
 ];
 
-type SearchResult = {
-  id: number;
-  source: string | null;
-  source_id: string | null;
-  title: string;
-  summary: string | null;
-  provider: string | null;
-  s_category: string | null;
-  region: string | null;
-  target_age_min: number | null;
-  target_age_max: number | null;
-  apply_start_dt: string | null;
-  apply_end_dt: string | null;
-  target_group: string | null;
-  target_tags: string[] | null;
-  support_type: string | null;
-  detail_url: string | null;
-  similarity: number;
-};
-
-type User = {
-  login_id: string;
-};
-
-type SavedFilter = {
-  filter_id?: number;
-  filter_name?: string;
-  regions: string[] | null;
-  categories: string[] | null;
-  target_age: number | null;
-  created_dt?: string;
-};
-
 type AuthMode = "login" | "signup";
-
-type ChatMessage = {
-  role: "user" | "assistant";
-  content: string;
-  results?: SearchResult[];
-};
 
 function parseTargetAge(value: string): number | null {
   if (!value.trim()) return null;
@@ -371,14 +326,17 @@ export default function Home() {
     setChatError(null);
 
     try {
-      const res = await fetch("/api/search", {
+      const res = await fetch("/api/chat/rag", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: trimmed }),
+        body: JSON.stringify({
+          message: trimmed,
+          history: chatMessages.slice(-8),
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error ?? "검색 중 오류가 발생했어요.");
+        throw new Error(data.error ?? "챗봇 답변 생성 중 오류가 발생했어요.");
       }
       const top = ((data.results ?? []) as SearchResult[])
         .filter(
@@ -389,18 +347,19 @@ export default function Home() {
       const reply: ChatMessage = {
         role: "assistant",
         content:
-          top.length === 0
-            ? "조건에 맞는 정책을 찾지 못했어요. 키워드를 조금 바꿔보세요."
+          typeof data.reply === "string" && data.reply.trim()
+            ? data.reply
             : "관련 정책을 찾았어요. 아래 후보를 확인해보세요.",
         results: top,
       };
       setChatMessages((prev) => [...prev, reply]);
     } catch (e) {
-      const message = e instanceof Error ? e.message : "알 수 없는 오류";
+      console.error(e);
+      const message = "에러 발생. 다시 시도해주세요.";
       setChatError(message);
       setChatMessages((prev) => [
         ...prev,
-        { role: "assistant", content: `오류가 발생했어요: ${message}` },
+        { role: "assistant", content: message },
       ]);
     } finally {
       setChatLoading(false);
@@ -669,7 +628,7 @@ function ChatPanel({
           <div>
             <h3 className="text-sm font-semibold">PolicyRec 챗봇</h3>
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              자연어로 물어보세요
+              궁금한 걸 물어보세요! 정책 추천도 가능합니다.
             </p>
           </div>
         </div>
@@ -736,9 +695,7 @@ function ChatPanel({
           ))}
         </ul>
 
-        {loading && (
-          <p className="mt-3 text-sm text-zinc-500">검색 중...</p>
-        )}
+        {loading && <p className="mt-3 text-sm text-zinc-500">답변 생성 중...</p>}
       </div>
 
       {error && (
@@ -767,7 +724,7 @@ function ChatPanel({
             disabled={loading || !input.trim()}
             className="rounded-lg bg-zinc-900 px-3 py-2 text-sm text-white transition-colors hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
           >
-            {loading ? "전송 중..." : "전송"}
+            {loading ? "답변 생성 중..." : "전송"}
           </button>
         </div>
       </div>
@@ -948,126 +905,5 @@ function FilterSelect({
         ))}
       </select>
     </label>
-  );
-}
-
-function PolicyCard({
-  item,
-  canScrap,
-  isScrapped,
-  onToggleScrap,
-}: {
-  item: SearchResult;
-  canScrap: boolean;
-  isScrapped: boolean;
-  onToggleScrap: (annId: number) => void;
-}) {
-  const sourceBadge = getSourceBadge(item.source);
-  const status = recruitmentStatus(item.apply_start_dt, item.apply_end_dt);
-  const statusBadge = STATUS_BADGE_STYLES[status];
-  const dday = dDayLabel(item.apply_end_dt);
-  const targetAgeLabel = formatTargetAgeRange(
-    item.target_age_min,
-    item.target_age_max
-  );
-  const similarityLabel =
-    item.similarity > 0
-      ? `유사도 ${(item.similarity * 100).toFixed(1)}%`
-      : "조건 일치";
-
-  return (
-    <li className="rounded-lg border border-zinc-200 bg-white p-5 transition-colors hover:border-zinc-300 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:border-zinc-600">
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-1.5">
-          {sourceBadge && (
-            <span
-              className={`rounded px-2 py-0.5 text-xs font-medium ${sourceBadge.bg} ${sourceBadge.text}`}
-            >
-              {sourceBadge.label}
-            </span>
-          )}
-          <span
-            className={`rounded px-2 py-0.5 text-xs font-medium ${statusBadge.bg} ${statusBadge.text}`}
-          >
-            {status}
-          </span>
-          <span className="text-xs text-zinc-400">{dday}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="shrink-0 text-xs text-zinc-400">
-            {similarityLabel}
-          </span>
-          <button
-            type="button"
-            onClick={() => onToggleScrap(item.id)}
-            disabled={!canScrap}
-            title={canScrap ? "스크랩" : "로그인 후 스크랩할 수 있습니다"}
-            className={`rounded-md border px-2 py-0.5 text-xs transition-colors ${
-              isScrapped
-                ? "border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-700 dark:bg-amber-900/40 dark:text-amber-200"
-                : "border-zinc-300 text-zinc-500 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
-            }`}
-          >
-            {isScrapped ? "★ 스크랩" : "☆ 스크랩"}
-          </button>
-        </div>
-      </div>
-
-      <h2 className="mb-2 text-lg font-semibold leading-tight">
-        {item.detail_url ? (
-          <a
-            href={item.detail_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="hover:underline"
-          >
-            {item.title}
-          </a>
-        ) : (
-          item.title
-        )}
-      </h2>
-
-      <div className="mb-2 flex flex-wrap gap-1.5">
-        {item.s_category && (
-          <span className="rounded bg-blue-100 px-2 py-0.5 text-xs text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
-            {item.s_category}
-          </span>
-        )}
-        {item.region && (
-          <span className="rounded bg-green-100 px-2 py-0.5 text-xs text-green-700 dark:bg-green-900/40 dark:text-green-300">
-            {item.region}
-          </span>
-        )}
-        {item.support_type && (
-          <span className="rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
-            {item.support_type}
-          </span>
-        )}
-        {item.target_tags?.slice(0, 3).map((tag, i) => (
-          <span
-            key={`${tag}-${i}`}
-            className="rounded bg-zinc-100 px-2 py-0.5 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
-          >
-            #{tag}
-          </span>
-        ))}
-      </div>
-
-      {item.summary && (
-        <p className="mb-2 line-clamp-2 text-sm text-zinc-600 dark:text-zinc-400">
-          {item.summary}
-        </p>
-      )}
-
-      <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-zinc-500">
-        {item.provider && <span>제공: {item.provider}</span>}
-        <span>
-          마감:{" "}
-          {item.apply_end_dt ? formatDate(item.apply_end_dt) : "상시/확인필요"}
-        </span>
-        <span>대상 연령: {targetAgeLabel}</span>
-      </div>
-    </li>
   );
 }

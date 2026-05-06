@@ -26,7 +26,7 @@ const FILTER_ONLY_MATCH_COUNT = 600;
 
 // 카드 표시에 필요한 컬럼들 (announcements 테이블에서 SELECT)
 // 누락된 컬럼이 DB에 있을 수도 있고 없을 수도 있어 안전하게 별표(*) 대신 명시
-const PRIMARY_RICH_COLUMNS = [
+const PRIMARY_BASE_COLUMNS = [
   "id",
   "source",
   "source_id",
@@ -43,6 +43,13 @@ const PRIMARY_RICH_COLUMNS = [
   "target_tags",
   "support_type",
   "detail_url",
+].join(",");
+
+const PRIMARY_EXTENDED_COLUMNS = [
+  PRIMARY_BASE_COLUMNS,
+  "application_method",
+  "required_documents",
+  "additional_conditions",
 ].join(",");
 
 // Read-only compatibility bridge for older local Supabase projects.
@@ -67,7 +74,7 @@ const LEGACY_RICH_COLUMNS = [
 
 const NATIONWIDE_REGION = "전국";
 
-type AnnouncementSchema = "primary" | "legacy";
+type AnnouncementSchema = "primary_extended" | "primary" | "legacy";
 type SupabaseLikeError = { message?: string };
 type NormalizedResultRow = Record<string, unknown> & {
   summary: string | null;
@@ -75,6 +82,9 @@ type NormalizedResultRow = Record<string, unknown> & {
   apply_start_dt: string | null;
   apply_end_dt: string | null;
   target_tags: string[];
+  application_method: string | null;
+  required_documents: string | null;
+  additional_conditions: string | null;
 };
 
 function isMissingColumnError(error: SupabaseLikeError | null) {
@@ -98,6 +108,10 @@ function normalizeTargetTags(value: unknown): string[] {
       .filter(Boolean);
   }
   return [];
+}
+
+function toNullableString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value : null;
 }
 
 function normalizeResultRow(row: Record<string, unknown>): NormalizedResultRow {
@@ -133,6 +147,9 @@ function normalizeResultRow(row: Record<string, unknown>): NormalizedResultRow {
     apply_start_dt: applyStart,
     apply_end_dt: applyEnd,
     target_tags: normalizeTargetTags(row.target_tags),
+    application_method: toNullableString(row.application_method),
+    required_documents: toNullableString(row.required_documents),
+    additional_conditions: toNullableString(row.additional_conditions),
   };
 }
 
@@ -173,16 +190,24 @@ function applyResultFilters(
   return filtered;
 }
 
+function columnsForSchema(schema: AnnouncementSchema) {
+  if (schema === "primary_extended") return PRIMARY_EXTENDED_COLUMNS;
+  if (schema === "primary") return PRIMARY_BASE_COLUMNS;
+  return LEGACY_RICH_COLUMNS;
+}
+
+function isPrimarySchema(schema: AnnouncementSchema) {
+  return schema === "primary_extended" || schema === "primary";
+}
+
 function buildFilteredAnnouncementsQuery(
   schema: AnnouncementSchema,
   filterCategory: string | null,
   filterRegion: string | null
 ) {
-  const columns =
-    schema === "primary" ? PRIMARY_RICH_COLUMNS : LEGACY_RICH_COLUMNS;
-  const categoryColumn = schema === "primary" ? "s_category" : "category";
-  const endDateColumn = schema === "primary" ? "apply_end_dt" : "end_date";
-  let tableQuery = supabase.from("announcements").select(columns);
+  const categoryColumn = isPrimarySchema(schema) ? "s_category" : "category";
+  const endDateColumn = isPrimarySchema(schema) ? "apply_end_dt" : "end_date";
+  let tableQuery = supabase.from("announcements").select(columnsForSchema(schema));
 
   if (filterCategory) {
     tableQuery = tableQuery.eq(categoryColumn, filterCategory);
@@ -201,18 +226,18 @@ async function searchByFiltersOnly(
   filterRegion: string | null,
   userAge: number | null
 ) {
-  let { data, error } = await buildFilteredAnnouncementsQuery(
-    "primary",
-    filterCategory,
-    filterRegion
-  );
+  let data: unknown[] | null = null;
+  let error: SupabaseLikeError | null = null;
 
-  if (error && isMissingColumnError(error)) {
-    ({ data, error } = await buildFilteredAnnouncementsQuery(
-      "legacy",
+  for (const schema of ["primary_extended", "primary", "legacy"] as const) {
+    const result = await buildFilteredAnnouncementsQuery(
+      schema,
       filterCategory,
       filterRegion
-    ));
+    );
+    data = result.data as unknown[] | null;
+    error = result.error;
+    if (!error || !isMissingColumnError(error)) break;
   }
 
   if (error) {
@@ -231,6 +256,23 @@ async function searchByFiltersOnly(
   }));
 
   return { results, error: null };
+}
+
+async function selectAnnouncementRowsByIds(ids: number[]) {
+  let data: unknown[] | null = null;
+  let error: SupabaseLikeError | null = null;
+
+  for (const schema of ["primary_extended", "primary", "legacy"] as const) {
+    const result = await supabase
+      .from("announcements")
+      .select(columnsForSchema(schema))
+      .in("id", ids);
+    data = result.data as unknown[] | null;
+    error = result.error;
+    if (!error || !isMissingColumnError(error)) break;
+  }
+
+  return { data, error };
 }
 
 export async function POST(request: NextRequest) {
@@ -283,12 +325,33 @@ export async function POST(request: NextRequest) {
 
     if (!hybridResult.error) {
       // 성공 (보미님 등록 완료 시점부터 자동으로 이 길로 들어옴)
-      const results = ((hybridResult.data ?? []) as Array<Record<string, unknown>>).map(
-        normalizeResultRow
+      const hybridRows = (hybridResult.data ?? []) as Array<
+        Record<string, unknown> & { id: number; similarity?: number }
+      >;
+      const ids = hybridRows.map((row) => row.id).filter(Number.isFinite);
+      const { data: richRowsRaw, error: richError } =
+        ids.length > 0
+          ? await selectAnnouncementRowsByIds(ids)
+          : { data: null, error: null };
+      const similarityById = new Map(
+        hybridRows.map((row) => [row.id, Number(row.similarity ?? 0)])
       );
+      const results =
+        richError || !richRowsRaw
+          ? hybridRows.map(normalizeResultRow)
+          : ((richRowsRaw ?? []) as Array<Record<string, unknown>>)
+              .map((row) => ({
+                ...row,
+                similarity: similarityById.get(row.id as number) ?? 0,
+              }))
+              .sort(
+                (a, b) =>
+                  (b.similarity as number) - (a.similarity as number)
+              )
+              .map(normalizeResultRow);
       return NextResponse.json({
         results,
-        rpc_used: "hybrid",
+        rpc_used: richError ? "hybrid" : "hybrid_with_table",
       });
     }
 
@@ -339,17 +402,8 @@ export async function POST(request: NextRequest) {
 
     // 구 RPC는 반환 컬럼이 적으므로 announcements 테이블에서 풍부한 컬럼 보강
     const ids = basicRows.map((r) => r.id);
-    let { data: richRowsRaw, error: richError } = await supabase
-      .from("announcements")
-      .select(PRIMARY_RICH_COLUMNS)
-      .in("id", ids);
-
-    if (richError && isMissingColumnError(richError)) {
-      ({ data: richRowsRaw, error: richError } = await supabase
-        .from("announcements")
-        .select(LEGACY_RICH_COLUMNS)
-        .in("id", ids));
-    }
+    const { data: richRowsRaw, error: richError } =
+      await selectAnnouncementRowsByIds(ids);
 
     if (richError) {
       console.warn(
