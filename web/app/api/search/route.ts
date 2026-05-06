@@ -1,0 +1,404 @@
+// =====================================================================
+// /api/search — 검색 API (POST 전용)
+// =====================================================================
+// 흐름:
+//   1) 클라이언트가 { query, filter_category?, filter_region?, user_age? } 로 POST
+//   2) 검색어 → Gemini 임베딩 (768차원)
+//   3) Supabase RPC 호출 — 1차/2차 폴백 전략:
+//      [1차] match_announcements_hybrid (보미님이 등록 후 사용 — 풍부한 컬럼)
+//      [2차] match_announcements (구 RPC, 등록되어 있음 — id+similarity만)
+//          → announcements 테이블에서 SELECT 로 풍부한 컬럼 보강
+//   4) 결과 리스트를 JSON으로 반환
+//
+// 1차가 성공하면 그대로 반환. 1차 실패(미등록/스키마캐시 미반영) 시 2차로 자동 폴백.
+// 보미님이 hybrid 등록하면 자동으로 1차에서 성공해 풍부한 컬럼 반환.
+// =====================================================================
+
+import { NextRequest, NextResponse } from "next/server";
+import { supabase } from "@/lib/supabase";
+import { getQueryEmbedding } from "@/lib/gemini";
+
+export const dynamic = "force-dynamic";
+
+const DEFAULT_MATCH_COUNT = 10;
+const FILTERED_FALLBACK_MATCH_COUNT = 100;
+const FILTER_ONLY_MATCH_COUNT = 600;
+
+// 카드 표시에 필요한 컬럼들 (announcements 테이블에서 SELECT)
+// 누락된 컬럼이 DB에 있을 수도 있고 없을 수도 있어 안전하게 별표(*) 대신 명시
+const PRIMARY_RICH_COLUMNS = [
+  "id",
+  "source",
+  "source_id",
+  "title",
+  "summary",
+  "provider",
+  "s_category",
+  "region",
+  "target_age_min",
+  "target_age_max",
+  "apply_start_dt",
+  "apply_end_dt",
+  "target_group",
+  "target_tags",
+  "support_type",
+  "detail_url",
+].join(",");
+
+// Read-only compatibility bridge for older local Supabase projects.
+// v1.1.9 remains the primary contract above.
+const LEGACY_RICH_COLUMNS = [
+  "id",
+  "source",
+  "source_id",
+  "title",
+  "summary",
+  "content",
+  "provider",
+  "category",
+  "region",
+  "target_age_min",
+  "target_age_max",
+  "start_date",
+  "end_date",
+  "target_group",
+  "detail_url",
+].join(",");
+
+const NATIONWIDE_REGION = "전국";
+
+type AnnouncementSchema = "primary" | "legacy";
+type SupabaseLikeError = { message?: string };
+type NormalizedResultRow = Record<string, unknown> & {
+  summary: string | null;
+  s_category: string | null;
+  apply_start_dt: string | null;
+  apply_end_dt: string | null;
+  target_tags: string[];
+};
+
+function isMissingColumnError(error: SupabaseLikeError | null) {
+  if (!error?.message) return false;
+  return (
+    error.message.includes("does not exist") ||
+    error.message.includes("Could not find")
+  );
+}
+
+function normalizeTargetTags(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter(
+      (tag): tag is string => typeof tag === "string" && tag.trim() !== ""
+    );
+  }
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function normalizeResultRow(row: Record<string, unknown>): NormalizedResultRow {
+  const category =
+    typeof row.s_category === "string"
+      ? row.s_category
+      : typeof row.category === "string"
+        ? row.category
+        : null;
+  const applyStart =
+    typeof row.apply_start_dt === "string"
+      ? row.apply_start_dt
+      : typeof row.start_date === "string"
+        ? row.start_date
+        : null;
+  const applyEnd =
+    typeof row.apply_end_dt === "string"
+      ? row.apply_end_dt
+      : typeof row.end_date === "string"
+        ? row.end_date
+        : null;
+  const summary =
+    typeof row.summary === "string"
+      ? row.summary
+      : typeof row.content === "string"
+        ? row.content
+        : null;
+
+  return {
+    ...row,
+    summary,
+    s_category: category,
+    apply_start_dt: applyStart,
+    apply_end_dt: applyEnd,
+    target_tags: normalizeTargetTags(row.target_tags),
+  };
+}
+
+function toNullableNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function applyResultFilters(
+  rows: Array<Record<string, unknown>>,
+  filterCategory: string | null,
+  filterRegion: string | null,
+  userAge: number | null
+) {
+  let filtered = rows.map(normalizeResultRow);
+  if (filterCategory) {
+    filtered = filtered.filter((r) => r.s_category === filterCategory);
+  }
+  if (filterRegion) {
+    // hybrid와 동일 규칙: 특정 지역 + 전국 함께 표시
+    filtered = filtered.filter(
+      (r) => r.region === filterRegion || r.region === NATIONWIDE_REGION
+    );
+  }
+  if (userAge !== null) {
+    filtered = filtered.filter((r) => {
+      const min = toNullableNumber(r.target_age_min);
+      const max = toNullableNumber(r.target_age_max);
+      const okMin = min === null || min <= userAge;
+      const okMax = max === null || max >= userAge;
+      return okMin && okMax;
+    });
+  }
+  return filtered;
+}
+
+function buildFilteredAnnouncementsQuery(
+  schema: AnnouncementSchema,
+  filterCategory: string | null,
+  filterRegion: string | null
+) {
+  const columns =
+    schema === "primary" ? PRIMARY_RICH_COLUMNS : LEGACY_RICH_COLUMNS;
+  const categoryColumn = schema === "primary" ? "s_category" : "category";
+  const endDateColumn = schema === "primary" ? "apply_end_dt" : "end_date";
+  let tableQuery = supabase.from("announcements").select(columns);
+
+  if (filterCategory) {
+    tableQuery = tableQuery.eq(categoryColumn, filterCategory);
+  }
+  if (filterRegion) {
+    tableQuery = tableQuery.in("region", [filterRegion, NATIONWIDE_REGION]);
+  }
+
+  return tableQuery
+    .order(endDateColumn, { ascending: true })
+    .limit(FILTER_ONLY_MATCH_COUNT);
+}
+
+async function searchByFiltersOnly(
+  filterCategory: string | null,
+  filterRegion: string | null,
+  userAge: number | null
+) {
+  let { data, error } = await buildFilteredAnnouncementsQuery(
+    "primary",
+    filterCategory,
+    filterRegion
+  );
+
+  if (error && isMissingColumnError(error)) {
+    ({ data, error } = await buildFilteredAnnouncementsQuery(
+      "legacy",
+      filterCategory,
+      filterRegion
+    ));
+  }
+
+  if (error) {
+    return { results: [], error };
+  }
+
+  const rows = (data ?? []) as unknown as Array<Record<string, unknown>>;
+  const results = applyResultFilters(
+    rows,
+    filterCategory,
+    filterRegion,
+    userAge
+  ).map((row) => ({
+    ...normalizeResultRow(row),
+    similarity: 0,
+  }));
+
+  return { results, error: null };
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    // ----- 1. 요청 파싱 -----
+    const body = await request.json().catch(() => ({}));
+    const query = typeof body.query === "string" ? body.query.trim() : "";
+    const filterCategory =
+      typeof body.filter_category === "string" && body.filter_category !== "전체"
+        ? body.filter_category
+        : null;
+    const filterRegion =
+      typeof body.filter_region === "string" && body.filter_region !== "전체"
+        ? body.filter_region
+        : null;
+    const userAge = typeof body.user_age === "number" ? body.user_age : null;
+
+    if (!query) {
+      const filterOnlyResult = await searchByFiltersOnly(
+        filterCategory,
+        filterRegion,
+        userAge
+      );
+
+      if (filterOnlyResult.error) {
+        return NextResponse.json(
+          { error: filterOnlyResult.error.message },
+          { status: 500 }
+        );
+      }
+
+      return NextResponse.json({
+        results: filterOnlyResult.results,
+        rpc_used: "table_filter",
+      });
+    }
+
+    // ----- 2. 검색어 → 임베딩 -----
+    const queryEmbedding = await getQueryEmbedding(query);
+
+    // ----- 3-1. 1차: hybrid RPC 시도 (필터 + 풍부한 컬럼) -----
+    const hybridResult = await supabase.rpc("match_announcements_hybrid", {
+      query_embedding: queryEmbedding,
+      match_threshold: 0.2,
+      match_count: 10,
+      filter_category: filterCategory,
+      filter_region: filterRegion,
+      user_age: userAge,
+    });
+
+    if (!hybridResult.error) {
+      // 성공 (보미님 등록 완료 시점부터 자동으로 이 길로 들어옴)
+      const results = ((hybridResult.data ?? []) as Array<Record<string, unknown>>).map(
+        normalizeResultRow
+      );
+      return NextResponse.json({
+        results,
+        rpc_used: "hybrid",
+      });
+    }
+
+    // hybrid 실패 → 로그 + 2차 폴백
+    console.warn(
+      "[/api/search] hybrid RPC 실패 → 구 match_announcements로 폴백:",
+      hybridResult.error.message
+    );
+
+    // ----- 3-2. 2차: 구 match_announcements + table SELECT 보강 -----
+    const hasFallbackFilters =
+      Boolean(filterCategory || filterRegion) || userAge !== null;
+    const basicResult = await supabase.rpc("match_announcements", {
+      query_embedding: queryEmbedding,
+      match_threshold: 0.2,
+      match_count: hasFallbackFilters
+        ? FILTERED_FALLBACK_MATCH_COUNT
+        : DEFAULT_MATCH_COUNT,
+    });
+
+    if (basicResult.error) {
+      // 둘 다 실패 — 진짜 문제
+      console.error(
+        "[/api/search] 두 RPC 모두 실패:",
+        basicResult.error
+      );
+      return NextResponse.json(
+        {
+          error: basicResult.error.message,
+          hint:
+            "Supabase에 RPC가 등록되어 있지 않습니다. " +
+            "Database/RPC_match_announcements_hybrid_v1.sql 또는 " +
+            "Database/유사도 검색을 위한 RPC 함수 생성.txt 를 SQL Editor에서 실행하세요.",
+        },
+        { status: 500 }
+      );
+    }
+
+    const basicRows = (basicResult.data ?? []) as Array<{
+      id: number;
+      similarity: number;
+      [key: string]: unknown;
+    }>;
+
+    if (basicRows.length === 0) {
+      return NextResponse.json({ results: [], rpc_used: "basic" });
+    }
+
+    // 구 RPC는 반환 컬럼이 적으므로 announcements 테이블에서 풍부한 컬럼 보강
+    const ids = basicRows.map((r) => r.id);
+    let { data: richRowsRaw, error: richError } = await supabase
+      .from("announcements")
+      .select(PRIMARY_RICH_COLUMNS)
+      .in("id", ids);
+
+    if (richError && isMissingColumnError(richError)) {
+      ({ data: richRowsRaw, error: richError } = await supabase
+        .from("announcements")
+        .select(LEGACY_RICH_COLUMNS)
+        .in("id", ids));
+    }
+
+    if (richError) {
+      console.warn(
+        "[/api/search] 풍부한 컬럼 보강 실패 — 구 RPC 결과만 반환:",
+        richError.message
+      );
+      const fallbackRows = applyResultFilters(
+        basicRows.map(normalizeResultRow),
+        filterCategory,
+        filterRegion,
+        userAge
+      ).slice(0, DEFAULT_MATCH_COUNT);
+      return NextResponse.json({
+        results: fallbackRows,
+        rpc_used: "basic_only",
+      });
+    }
+
+    // Supabase 타입 생성 파일이 아직 없어서, select 결과를 직접 행 객체로 간주합니다.
+    const richRows = (richRowsRaw ?? []) as unknown as Array<Record<string, unknown>>;
+
+    // similarity는 RPC에서, 나머지 컬럼은 table에서 가져와 합치기
+    const similarityById = new Map(
+      basicRows.map((r) => [r.id, r.similarity])
+    );
+
+    // similarity 순으로 정렬해서 반환
+    const merged: Array<Record<string, unknown> & { similarity: number }> = richRows
+      .map((row) => ({
+        ...row,
+        similarity: similarityById.get(row.id as number) ?? 0,
+      }))
+      .sort((a, b) => b.similarity - a.similarity);
+
+    // 클라이언트 사이드 필터 적용 (구 RPC는 필터 인자 안 받으므로 여기서 처리)
+    const filtered = applyResultFilters(
+      merged.map(normalizeResultRow),
+      filterCategory,
+      filterRegion,
+      userAge
+    ).slice(0, DEFAULT_MATCH_COUNT);
+
+    return NextResponse.json({
+      results: filtered,
+      rpc_used: "basic_with_table",
+    });
+  } catch (e) {
+    console.error("[/api/search] error:", e);
+    const message = e instanceof Error ? e.message : "알 수 없는 오류";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
