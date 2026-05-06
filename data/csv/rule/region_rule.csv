@@ -1,0 +1,85 @@
+rule_id,match_type,pattern,replacement,priority,note
+# ==================================================================
+# region 룰표 v1.1.8
+# ==================================================================
+# 적용 대상: PolicyRec_v1_1_8.ipynb 정제 단계의 region 컬럼
+#
+# 배경 (2026-05-04 진단):
+#   - biz: jrsdInsttNm(소관부처명)이 region에 들어간 케이스 다수 (예: 중소벤처기업부 23건)
+#   - youth: rgtrInstCdNm(등록기관명)이 region에 들어간 케이스 다수 (예: 제주특별자치도경제통상진흥원 경영본부 청년센터 77건)
+#   - kst: 짧은 표기(서울/경기/부산 등)와 긴 표기(서울특별시 등) alias 혼재
+#
+# match_type 종류:
+#   - exact:    완전 일치    (region == pattern)
+#   - prefix:   앞부분 일치   (region.startswith(pattern))
+#   - contains: 일부 포함     (pattern in region)
+#
+# 우선순위: priority 숫자가 작을수록 먼저 적용. 첫 매칭에서 결정 종료.
+#
+# 적용 결과 예상 (565건 main 기준):
+#   - alias: 서울 35 + 경기 11 + 부산 6 + 인천 6 + 대전 5 + 전남/충남/경남 3 등 정규화
+#   - 부처명 → 전국: biz 약 53건
+#   - 기관명 prefix 추출: youth 약 129건
+# ==================================================================
+
+# === Priority 1: 짧은 표기 → 긴 표기 (alias 통일) ===
+# 17개 시도. region이 "서울" 같은 짧은 값이면 긴 공식 표기로 바꿈.
+R01,exact,서울,서울특별시,1,alias
+R02,exact,부산,부산광역시,1,alias
+R03,exact,대구,대구광역시,1,alias
+R04,exact,인천,인천광역시,1,alias
+R05,exact,광주,광주광역시,1,alias
+R06,exact,대전,대전광역시,1,alias
+R07,exact,울산,울산광역시,1,alias
+R08,exact,세종,세종특별자치시,1,alias
+R09,exact,경기,경기도,1,alias
+R10,exact,강원,강원특별자치도,1,alias
+R11,exact,충북,충청북도,1,alias
+R12,exact,충남,충청남도,1,alias
+R13,exact,전북,전북특별자치도,1,alias
+R14,exact,전남,전라남도,1,alias
+R15,exact,경북,경상북도,1,alias
+R16,exact,경남,경상남도,1,alias
+R17,exact,제주,제주특별자치도,1,alias
+
+# === Priority 2: 부처명/공공기관 → "전국" ===
+# biz의 jrsdInsttNm이 region에 잘못 들어간 케이스. 부처 사업은 보통 전국 단위.
+R20,exact,중소벤처기업부,전국,2,biz jrsdInsttNm 혼입
+R21,exact,산업통상부,전국,2,biz jrsdInsttNm 혼입
+R22,exact,문화체육관광부,전국,2,biz jrsdInsttNm 혼입
+R23,exact,농림축산식품부,전국,2,biz jrsdInsttNm 혼입
+R24,exact,과학기술정보통신부,전국,2,biz jrsdInsttNm 혼입
+R25,exact,기후에너지환경부,전국,2,biz jrsdInsttNm 혼입
+R26,contains,중소벤처기업부 창업벤처혁신실,전국,2,biz 부처+부서 형태
+R27,exact,한국고용정보원,전국,2,youth 공공기관
+R28,exact,청년정책관,전국,2,youth 시도 prefix 누락 케이스
+R29,exact,교육부,전국,2,biz jrsdInsttNm 혼입 (1차 누락분)
+R52,exact,외교부,전국,2,biz jrsdInsttNm 혼입 (1차 누락분)
+R53,exact,해양수산부,전국,2,biz jrsdInsttNm 혼입 (1차 누락분)
+R54,exact,조달청,전국,2,biz jrsdInsttNm 혼입 (1차 누락분)
+R55,exact,고용노동부,전국,2,biz jrsdInsttNm 혼입 (1차 누락분)
+
+# === Priority 3: 시도 prefix 추출 (긴 기관명 → 시도명) ===
+# 17개 시도. "제주특별자치도경제통상진흥원..." → "제주특별자치도" 식으로 잘라냄.
+R30,prefix,제주특별자치도,제주특별자치도,3,youth 기관명 prefix
+R31,prefix,부산광역시,부산광역시,3,youth 기관명 prefix
+R32,prefix,경기도,경기도,3,youth 기관명 prefix
+R33,prefix,전북특별자치도,전북특별자치도,3,youth 기관명 prefix
+R34,prefix,경상남도,경상남도,3,youth 기관명 prefix
+R35,prefix,전라남도,전라남도,3,youth 기관명 prefix
+R36,prefix,강원특별자치도,강원특별자치도,3,youth 기관명 prefix
+R37,prefix,서울특별시,서울특별시,3,youth 기관명 prefix
+R38,prefix,인천광역시,인천광역시,3,예방용 (현재 main 데이터엔 없지만 신규 데이터 대비)
+R39,prefix,대구광역시,대구광역시,3,예방용
+R40,prefix,대전광역시,대전광역시,3,예방용
+R41,prefix,광주광역시,광주광역시,3,예방용
+R42,prefix,울산광역시,울산광역시,3,예방용
+R43,prefix,세종특별자치시,세종특별자치시,3,예방용
+R44,prefix,충청북도,충청북도,3,예방용
+R45,prefix,충청남도,충청남도,3,예방용
+R46,prefix,경상북도,경상북도,3,예방용
+
+# === Priority 4: 특수 케이스 (시도 prefix 없는 기관명) ===
+R50,exact,광주시청,광주광역시,4,youth 27건. "광주시청"은 광주광역시 의미.
+R51,contains,재단법인전라남도,전라남도,4,"재단법인전라남도중소기업..." 형태
+

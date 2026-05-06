@@ -7,9 +7,15 @@ on:
 
 env:
   # ====================================================
-  # 버전 관리: 노트북 업그레이드 시 여기 한 줄만 수정
+  # 버전 관리
+  # - RAW_VERSION: 수집/정규화 raw CSV 기준
+  # - PIPELINE_VERSION: 사람 검수용 main CSV를 만드는 노트북 기준
+  #
+  # v1.1.9는 raw_v1_1_8.csv를 입력으로 유지하고,
+  # region 정규화까지 적용한 main_v1_1_9.csv를 출력합니다.
   # ====================================================
-  PIPELINE_VERSION: v1_1_8
+  RAW_VERSION: v1_1_8
+  PIPELINE_VERSION: v1_1_9
 
 jobs:
   collect-and-normalize:
@@ -44,7 +50,7 @@ jobs:
       - name: Copy combined csv to pipeline input
         run: |
           mkdir -p data/csv/raw
-          cp data/clean/combined.csv data/csv/raw/raw_${PIPELINE_VERSION}.csv
+          cp data/clean/combined.csv data/csv/raw/raw_${RAW_VERSION}.csv
 
       - name: Rename raw files to auto prefix
         run: |
