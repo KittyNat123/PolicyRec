@@ -106,6 +106,8 @@ export default function Home() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [savedFilter, setSavedFilter] = useState<SavedFilter | null>(null);
   const [scrappedIds, setScrappedIds] = useState<Set<number>>(new Set());
+  const [scrappedItems, setScrappedItems] = useState<SearchResult[]>([]);
+  const [scrapsLoading, setScrapsLoading] = useState(false);
   const [showScrappedOnly, setShowScrappedOnly] = useState(false);
   const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
@@ -144,6 +146,7 @@ export default function Home() {
       await loadScraps();
     } else {
       setScrappedIds(new Set());
+      setScrappedItems([]);
     }
     if (data.filter_error) {
       setAuthMessage(`필터 조회 오류: ${data.filter_error}`);
@@ -189,6 +192,7 @@ export default function Home() {
     setCurrentUser(null);
     setSavedFilter(null);
     setScrappedIds(new Set());
+    setScrappedItems([]);
     setShowScrappedOnly(false);
     setAuthMessage("로그아웃했습니다.");
   }
@@ -220,8 +224,57 @@ export default function Home() {
       }
       return next;
     });
+    if (isScrapped) {
+      setScrappedItems((prev) => prev.filter((item) => item.id !== annId));
+    }
     setAuthMessage(isScrapped ? "스크랩을 해제했습니다." : "스크랩했습니다.");
   }
+
+  useEffect(() => {
+    if (!showScrappedOnly || !currentUser) {
+      return;
+    }
+
+    const ids = Array.from(scrappedIds);
+    if (ids.length === 0) {
+      return;
+    }
+
+    let ignore = false;
+    async function loadScrappedItems() {
+      setScrapsLoading(true);
+      try {
+        const res = await fetch("/api/announcements/by-ids", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids }),
+        });
+        if (!res.ok) {
+          throw new Error(await readApiError(res, "스크랩 공고를 불러오지 못했어요."));
+        }
+        const data = await res.json().catch(() => ({}));
+        if (!ignore) {
+          setScrappedItems((data.results ?? []) as SearchResult[]);
+        }
+      } catch (e) {
+        if (!ignore) {
+          setAuthMessage(
+            e instanceof Error ? e.message : "스크랩 공고를 불러오지 못했어요."
+          );
+          setScrappedItems([]);
+        }
+      } finally {
+        if (!ignore) {
+          setScrapsLoading(false);
+        }
+      }
+    }
+
+    void loadScrappedItems();
+    return () => {
+      ignore = true;
+    };
+  }, [currentUser, scrappedIds, showScrappedOnly]);
 
   async function saveCurrentFilter() {
     setAuthMessage(null);
@@ -386,13 +439,15 @@ export default function Home() {
   const visibleResults =
     showScrappedOnly && currentUser
       ? (filterStatus === ALL
-          ? results
-          : results.filter(
+          ? scrappedIds.size === 0
+            ? []
+            : scrappedItems
+          : (scrappedIds.size === 0 ? [] : scrappedItems).filter(
               (r) =>
                 recruitmentStatus(r.apply_start_dt, r.apply_end_dt) ===
                 filterStatus
             )
-        ).filter((r) => scrappedIds.has(r.id))
+        )
       : statusFilteredResults;
   const canSearch = Boolean(
     query.trim() ||
@@ -430,7 +485,13 @@ export default function Home() {
             onApplyFilter={applySavedFilter}
             scrapCount={scrappedIds.size}
             showScrappedOnly={showScrappedOnly}
-            onToggleScrappedOnly={() => setShowScrappedOnly((value) => !value)}
+            onToggleScrappedOnly={() => {
+              setShowScrappedOnly((value) => {
+                const next = !value;
+                if (next) setSearched(true);
+                return next;
+              });
+            }}
           />
         </header>
 
@@ -517,7 +578,8 @@ export default function Home() {
 
         {searched && !loading && !error && (
           <div className="mb-3 text-sm text-zinc-500">
-            검색 결과 {visibleResults.length}건
+            {showScrappedOnly && currentUser ? "스크랩한 공고" : "검색 결과"}{" "}
+            {visibleResults.length}건
             {filterStatus !== ALL && results.length !== visibleResults.length && (
               <span className="text-zinc-400">
                 {" "}
@@ -530,9 +592,17 @@ export default function Home() {
           </div>
         )}
 
-        {searched && !loading && visibleResults.length === 0 && !error && (
+        {searched && !loading && !scrapsLoading && visibleResults.length === 0 && !error && (
           <div className="py-16 text-center text-zinc-500">
-            검색 결과가 없어요. 키워드나 필터를 조정해보세요.
+            {showScrappedOnly && currentUser
+              ? "아직 스크랩한 정책이 없어요."
+              : "검색 결과가 없어요. 키워드나 필터를 조정해보세요."}
+          </div>
+        )}
+
+        {scrapsLoading && scrappedIds.size > 0 && showScrappedOnly && currentUser && (
+          <div className="py-16 text-center text-zinc-500">
+            스크랩한 공고를 불러오는 중...
           </div>
         )}
 
@@ -673,7 +743,7 @@ function ChatPanel({
                 </div>
               ) : (
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm text-zinc-700 dark:text-zinc-300">
+                  <p className="whitespace-pre-wrap break-words text-sm text-zinc-700 dark:text-zinc-300">
                     {msg.content}
                   </p>
                   {msg.results && msg.results.length > 0 && (

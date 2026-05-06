@@ -178,6 +178,7 @@ export async function generatePolicyAnswer({
 - 상세 링크가 없는 정책은 공식 링크가 없다고 설명하고, 신청 방법/제공 기관/공고명 검색 같은 대안 확인 방법을 안내한다.
 - 답변은 3~6문장 정도로 쓰고, 마지막에 추천 정책명을 1~3개만 짧게 나열한다.
 - 사용자가 비교/조건을 물으면 조건에 맞는 이유를 간단히 말한다.
+- 마크다운 굵게 표시는 쓰지 않는다.
 
 최근 대화:
 ${recentHistory || "없음"}
@@ -202,7 +203,10 @@ export async function generateGeneralPolicyReply({
   const recentHistory = formatRecentHistory(history);
   const prompt = `
 사용자가 정책 검색 조건을 아직 말하지 않았거나 가벼운 인사/잡담을 했다.
-정책을 억지로 추천하지 말고, 자연스럽게 응답한 뒤 어떤 정보를 주면 추천할 수 있는지 안내하라.
+정책을 억지로 추천하지 말고 실제 대화처럼 자연스럽게 응답하라.
+마크다운 굵게, 정책 목록, 추천 정책명 나열은 하지 않는다.
+답변은 2~3문장 이내로 짧게 쓴다.
+사용자가 어떤 정보를 줘야 하는지 물으면 지역, 나이, 관심 분야, 창업/취업/주거 같은 상황을 알려달라고 안내한다.
 
 좋은 답변 예시:
 "안녕하세요! 궁금한 걸 물어보세요. 지역, 나이, 관심 분야나 창업 단계가 있으면 더 잘 맞는 정책을 추천해드릴게요."
@@ -214,5 +218,5 @@ ${recentHistory || "없음"}
 ${question}
 `.trim();
 
-  return generateWithFallback(prompt, 300);
+  return generateWithFallback(prompt, 220);
 }

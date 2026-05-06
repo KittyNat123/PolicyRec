@@ -340,15 +340,15 @@ export async function POST(request: NextRequest) {
         richError || !richRowsRaw
           ? hybridRows.map(normalizeResultRow)
           : ((richRowsRaw ?? []) as Array<Record<string, unknown>>)
-              .map((row) => ({
-                ...row,
-                similarity: similarityById.get(row.id as number) ?? 0,
-              }))
-              .sort(
-                (a, b) =>
-                  (b.similarity as number) - (a.similarity as number)
-              )
-              .map(normalizeResultRow);
+            .map((row) => ({
+              ...row,
+              similarity: similarityById.get(row.id as number) ?? 0,
+            }))
+            .sort(
+              (a, b) =>
+                (b.similarity as number) - (a.similarity as number)
+            )
+            .map(normalizeResultRow);
       return NextResponse.json({
         results,
         rpc_used: richError ? "hybrid" : "hybrid_with_table",

@@ -15,6 +15,20 @@ function hasText(value: string | null | undefined) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function isYouthPolicy(item: SearchResult) {
+  return item.source?.toLowerCase() === "youth";
+}
+
+function youthDetailUrl(item: SearchResult) {
+  const sourceId = item.source_id?.trim();
+  if (!isYouthPolicy(item) || !sourceId || !/^\d+$/.test(sourceId)) return null;
+  return `https://www.youthcenter.go.kr/youthPolicy/ythPlcyTotalSearch/ythPlcyDetail/${sourceId}`;
+}
+
+function compactYouthKeyword(title: string) {
+  return title.replace(/[\s"'`()[\]{}<>·,.:;!?~\-_/\\]/g, "").slice(0, 8);
+}
+
 function DetailRow({
   label,
   children,
@@ -65,11 +79,11 @@ export function PolicyCard({
         .join(" "),
     [item.provider, item.region, item.title]
   );
-  const googleSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(
-    searchKeyword
-  )}`;
-  const naverSearchUrl = `https://search.naver.com/search.naver?query=${encodeURIComponent(
-    searchKeyword
+  const youthFallbackUrl = youthDetailUrl(item);
+  const detailUrl = item.detail_url ?? youthFallbackUrl;
+  const youthSearchKeyword = compactYouthKeyword(item.title) || searchKeyword;
+  const youthSearchUrl = `https://www.youthcenter.go.kr/totalSearch/search?keyword=${encodeURIComponent(
+    youthSearchKeyword
   )}`;
   const hasTargetTags = Boolean(item.target_tags?.length);
   const hasExpandableDetails =
@@ -97,7 +111,12 @@ export function PolicyCard({
           >
             {status}
           </span>
-          {!item.detail_url && (
+          {!item.detail_url && youthFallbackUrl && (
+            <span className="rounded bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700 dark:bg-sky-900/40 dark:text-sky-300">
+              온통청년 상세 후보
+            </span>
+          )}
+          {!item.detail_url && !youthFallbackUrl && (
             <span className="rounded bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
               상세 링크 없음
             </span>
@@ -125,9 +144,9 @@ export function PolicyCard({
       </div>
 
       <h2 className="mb-2 text-lg font-semibold leading-tight">
-        {item.detail_url ? (
+        {detailUrl ? (
           <a
-            href={item.detail_url}
+            href={detailUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="hover:underline"
@@ -189,23 +208,23 @@ export function PolicyCard({
         >
           {expanded ? "접기" : "자세히 보기"}
         </button>
-        {!item.detail_url && searchKeyword && (
+        {!item.detail_url && youthFallbackUrl && (
           <>
             <a
-              href={googleSearchUrl}
+              href={youthFallbackUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="rounded-md border border-blue-200 px-3 py-1.5 text-sm text-blue-700 transition-colors hover:bg-blue-50 dark:border-blue-800 dark:text-blue-300 dark:hover:bg-blue-950"
+              className="rounded-md border border-sky-200 px-3 py-1.5 text-sm text-sky-700 transition-colors hover:bg-sky-50 dark:border-sky-800 dark:text-sky-300 dark:hover:bg-sky-950"
             >
-              공고명으로 검색(Google)
+              온통청년 상세 보기
             </a>
             <a
-              href={naverSearchUrl}
+              href={youthSearchUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="rounded-md border border-green-200 px-3 py-1.5 text-sm text-green-700 transition-colors hover:bg-green-50 dark:border-green-800 dark:text-green-300 dark:hover:bg-green-950"
             >
-              공고명으로 검색(Naver)
+              온통청년에서 검색
             </a>
           </>
         )}

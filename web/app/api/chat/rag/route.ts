@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  generateGeneralPolicyReply,
   generatePolicyAnswer,
   getQueryEmbedding,
 } from "@/lib/gemini";
@@ -233,14 +232,30 @@ function isCasualMessage(message: string) {
     "뭐해",
     "너누구",
     "도와줘",
+    "정보",
+    "뭘말",
+    "뭐말",
+    "뭐주면",
+    "어떤정보",
+    "어떻게말",
+    "무엇을말",
   ];
   return (
-    normalized.length <= 20 &&
+    normalized.length <= 40 &&
     casualSignals.some((signal) => normalized.includes(signal))
   );
 }
 
-function buildGeneralFallbackAnswer() {
+function buildGeneralAnswer(question: string) {
+  const normalized = question.replace(/\s/g, "");
+  if (
+    normalized.includes("정보") ||
+    normalized.includes("뭐") ||
+    normalized.includes("무엇") ||
+    normalized.includes("어떤")
+  ) {
+    return "지역, 나이, 관심 분야를 알려주시면 좋아요. 예를 들면 “천안에 사는 25살 예비창업자인데 자금 지원이 궁금해요”처럼 물어보면 맞는 정책을 찾아드릴게요.";
+  }
   return "안녕하세요! 궁금한 걸 물어보세요. 지역, 나이, 관심 분야나 창업 단계가 있으면 더 잘 맞는 정책을 추천해드릴게요.";
 }
 
@@ -258,16 +273,8 @@ export async function POST(request: NextRequest) {
     }
 
     if (isCasualMessage(question)) {
-      let reply: string;
-      try {
-        reply = await generateGeneralPolicyReply({ question, history });
-      } catch (error) {
-        console.warn("[/api/chat/rag] Gemini 일반 답변 생성 실패:", error);
-        reply = buildGeneralFallbackAnswer();
-      }
-
       return NextResponse.json({
-        reply,
+        reply: buildGeneralAnswer(question),
         results: [],
         intent: "general",
       });
