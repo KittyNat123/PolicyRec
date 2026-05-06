@@ -15,7 +15,7 @@ env:
   # region 정규화까지 적용한 main_v1_1_9.csv를 출력합니다.
   # ====================================================
   RAW_VERSION: v1_1_8
-  PIPELINE_VERSION: v1_1_9
+  PIPELINE_VERSION: v1_1_10
 
 jobs:
   collect-and-normalize:
