@@ -1,35 +1,9 @@
 match_field,match_type,pattern,tag,priority,note
-# ==================================================================
-# target_tags 룰표 v2 (PolicyRec v1.1.7)
-# ==================================================================
-# v1 → v2 변경:
-#   - 1인 창조기업 → 예비창업자(X) → 초기창업기업(O)
-#   - 일반기업 → 중소기업(X) → 기업(O) (별도 태그 신설)
-#   - 사회적기업 → 중소기업(X) → 사회적기업(O) (별도 태그 신설)
-#   - 태그 11종으로 확장 (기업, 사회적기업 추가)
-#
-# 태그 목록:
-#   청년          → 만 19~39세 대상
-#   예비창업자     → 창업 전 단계
-#   초기창업기업   → 업력 7년 이하 (1인 창조기업 포함)
-#   중소기업       → 중소기업
-#   소상공인       → 소상공인
-#   스타트업       → 스타트업
-#   사회적기업     → 사회적기업 (별도 카테고리)
-#   기업           → 일반 기업 (대기업 포함 광범위)
-#   농업인         → 농업인·귀농귀촌
-#   여성           → 여성 대상
-#   누구나         → 제한 없음
-# ==================================================================
-
-# === Priority 1: target_group 코드 (youth API) ===
 target_group,code,0013001,청년,1,youth API 코드 - 청년
 target_group,code,0013003,청년,1,youth API 코드 - 청년(대학생 포함)
 target_group,code,0013006,청년,1,youth API 코드 - 청년(취업준비생)
 target_group,code,0013008,청년,1,youth API 코드 - 청년(귀농귀촌)
 target_group,code,0013010,청년,1,youth API 코드 - 청년(일반)
-
-# === Priority 2: target_group 키워드 (정확한 매칭) ===
 target_group,keyword,청소년,청년,2,청소년 = 청년 포함
 target_group,keyword,청년,청년,2,청년 명시
 target_group,keyword,예비창업,예비창업자,2,예비창업자 명시
@@ -39,11 +13,7 @@ target_group,keyword,중소기업,중소기업,2,중소기업 명시
 target_group,keyword,소상공인,소상공인,2,소상공인 명시
 target_group,keyword,사회적기업,사회적기업,2,사회적기업 - 별도 카테고리
 target_group,keyword,일반기업,기업,2,일반기업 - 대기업 포함 가능
-
-# === Priority 3: target_group 키워드 (간접 매칭) ===
 target_group,keyword,대학생,청년,3,대학생 = 보통 청년 (대학원생 일부 예외)
-
-# === Priority 4: title 키워드 ===
 title,keyword,청년,청년,4,제목에 청년 포함
 title,keyword,스타트업,스타트업,4,제목에 스타트업 포함
 title,keyword,예비창업,예비창업자,4,제목에 예비창업 포함
@@ -55,14 +25,23 @@ title,keyword,사회적기업,사회적기업,4,제목에 사회적기업 포함
 title,keyword,여성,여성,4,제목에 여성 포함
 title,keyword,농업인,농업인,4,제목에 농업인 포함
 title,keyword,귀농,농업인,4,제목에 귀농 포함
-
-# === Priority 5: s_category 기반 (youth 데이터 보완) ===
 s_category,category,주거,청년,5,주거 지원 = youth 청년 대상
 s_category,category,복지/문화,청년,5,복지/문화 = youth 청년 대상
-
-# === Priority 6: target_detail 키워드 ===
 target_detail,keyword,제한 없음,누구나,6,누구나 신청 가능
 target_detail,keyword,누구나,누구나,6,누구나 명시
 target_detail,keyword,예비창업,예비창업자,6,target_detail에 예비창업
 target_detail,keyword,만 19세,청년,6,연령 조건에 청년 범위
 target_detail,keyword,만 39세,청년,6,연령 조건에 청년 범위
+target_group,code,0013009,청년,1,youth API 코드 - 청년(농업인/재도전 포함)
+target_group,code,0049010,청년,1,youth API 코드 - 지원유형(청년 대상)
+target_group,code,0049005,청년,1,youth API 코드 - 학자금/장학금
+target_group,code,0049006,청년,1,youth API 코드 - 학자금/장학금
+target_group,code,0049007,청년,1,youth API 코드 - 학자금/장학금
+target_group,code,0049008,청년,1,youth API 코드 - 학자금/장학금
+target_group,code,0049003,청년,1,youth API 코드 - 취업지원
+target_group,code,0049004,청년,1,youth API 코드 - 취업지원
+target_group,code,0049009,청년,1,youth API 코드 - 기타 청년지원
+target_group,code,0049002,청년,1,youth API 코드 - 기타 청년지원
+target_group,keyword,일반인,누구나,2,일반인 = 누구나
+target_group,keyword,해당없음,누구나,2,해당없음 = 누구나
+target_group,keyword,제한 없음,누구나,2,제한 없음 = 누구나
