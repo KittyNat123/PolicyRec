@@ -1,7 +1,14 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# =========================================================================
+# PolicyRec gitignore 설정
+# 최종 수정일: 2026-05-07
+# =========================================================================
 
-# dependencies
+# 1. 의존성 및 패키지 관리 (Dependencies & Virtual Envs)
+node_modules/
 /node_modules
+.venv/
+venv/
+/env
 /.pnp
 .pnp.*
 .yarn/*
@@ -9,33 +16,58 @@
 !.yarn/plugins
 !.yarn/releases
 !.yarn/versions
+.codex-sheets/
+.uv-cache/
 
-# testing
-/coverage
-
-# next.js
+# 2. 빌드 및 배포 산출물 (Build / Production)
 /.next/
 /out/
-
-# production
 /build
+dist/
+.vercel
+*.tsbuildinfo
+next-env.d.ts
 
-# misc
-.DS_Store
+# 3. 환경 변수 및 설정 파일 (Env / Secrets / IDE)
+.env*
 *.pem
+.idea/
+.claude
+.vscode/
 
-# debug
+# 4. 데이터 및 작업 산출물 (Data Pipeline / Outputs)
+# - Raw 데이터
+data/raw/**/*.json
+data/raw/**/*.xml
+data/raw/**/*.txt
+# - 수집 및 정제 파일
+data/attachments/**
+data/clean/*.csv
+data/app/user_pref_demo.json
+
+# 5. 아카이브 및 구버전/개인 작업 (Archive & Drafts)
+archive/
+gitignore/
+데이터 수집 파이프라인 초안.ipynb
+*_kwon*
+*.gsheet*
+PolicyRec_v1_1_*.ipynb
+*.dll
+*.node
+
+# 6. 파이썬 및 주피터 관련 (Python & Jupyter)
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# 7. 로그 및 시스템 파일 (Logs & System)
+*.log
+.streamlit_app.log
+.streamlit_app.err.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
-
-# env files (can opt-in for committing if needed)
-.env*
-
-# vercel
-.vercel
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
+.DS_Store
+/coverage
