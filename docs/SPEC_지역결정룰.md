@@ -8,7 +8,7 @@
 >
 > **관련 파일**:
 > - `data/csv/rule/region_rule.csv` — 기존 룰 (1~3단계 그대로 사용, 유지)
-> - `PolicyRec_v1_1_10.ipynb` — region 결정 함수 위치 (창엽 작업 대상)
+> - `PolicyRec_v1_1_11.ipynb` — region 결정 함수 위치 (창엽 작업 대상)
 > - `web/app/api/search/route.ts` — DB의 region을 그대로 사용 (수정 없음)
 
 ---
@@ -150,7 +150,7 @@ def detect_sub_region(title: str, provider: str | None) -> str | None:
 
 ## 4. 노트북 적용 위치 (창엽 작업)
 
-**파일**: `PolicyRec_v1_1_10.ipynb`
+**파일**: `PolicyRec_v1_1_11.ipynb`
 **대상 함수**: 현재 `region_rule.csv`를 읽어 region을 결정하는 함수 (예상 명칭: `resolve_region`, `apply_region_rule` 등)
 
 **수정 후 의사 코드 (6단계 통합)**:

@@ -11,11 +11,11 @@ env:
   # - RAW_VERSION: 수집/정규화 raw CSV 기준
   # - PIPELINE_VERSION: 사람 검수용 main CSV를 만드는 노트북 기준
   #
-  # v1.1.9는 raw_v1_1_8.csv를 입력으로 유지하고,
-  # region 정규화까지 적용한 main_v1_1_9.csv를 출력합니다.
+  # v1.1.11은 raw_v1_1_8.csv를 입력으로 유지하고,
+  # region 정규화와 URL 보정까지 적용한 main_v1_1_11.csv를 출력합니다.
   # ====================================================
   RAW_VERSION: v1_1_8
-  PIPELINE_VERSION: v1_1_10
+  PIPELINE_VERSION: v1_1_11
 
 jobs:
   collect-and-normalize:
