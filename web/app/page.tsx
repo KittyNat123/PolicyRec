@@ -10,10 +10,16 @@
 "use client";
 
 import Image from "next/image";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { PolicyCard } from "@/components/PolicyCard";
 import { recruitmentStatus, type RecruitmentStatus } from "@/lib/utils";
-import type { ChatMessage, SavedFilter, SearchResult, User } from "@/lib/types";
+import type {
+  ChatMessage,
+  SavedChat,
+  SavedFilter,
+  SearchResult,
+  User,
+} from "@/lib/types";
 
 const ALL = "전체";
 
@@ -64,6 +70,8 @@ const STATUSES: (RecruitmentStatus | typeof ALL)[] = [
 ];
 
 type AuthMode = "login" | "signup";
+type SortBy = "end_date_asc" | "start_date_desc" | "similarity_desc";
+type ServerSortBy = Exclude<SortBy, "similarity_desc">;
 
 function parseTargetAge(value: string): number | null {
   if (!value.trim()) return null;
@@ -87,13 +95,50 @@ async function readApiError(response: Response, fallback: string) {
   return data.error ?? fallback;
 }
 
+function formatSavedChatDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("ko-KR", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function collectChatAnnIds(messages: ChatMessage[]): number[] {
+  return Array.from(
+    new Set(
+      messages.flatMap((message) =>
+        (message.results ?? [])
+          .map((result) => result.id)
+          .filter((id) => Number.isInteger(id) && id > 0)
+      )
+    )
+  );
+}
+
+function buildChatTranscript(messages: ChatMessage[]): string {
+  return messages
+    .map((message) => {
+      const speaker = message.role === "user" ? "사용자" : "PolicyRec";
+      const annIds = collectChatAnnIds([message]);
+      const recommended =
+        annIds.length > 0 ? `\n추천 정책 ID: ${annIds.join(", ")}` : "";
+      return `${speaker}\n${message.content}${recommended}`;
+    })
+    .join("\n\n---\n\n");
+}
+
 // 키워드 검색 결과처럼 클라이언트에서 재정렬할 때 사용
 function sortResultsClientSide(
   results: SearchResult[],
-  sortBy: "end_date_asc" | "start_date_desc"
+  sortBy: SortBy
 ): SearchResult[] {
   const copy = [...results];
-  if (sortBy === "end_date_asc") {
+  if (sortBy === "similarity_desc") {
+    copy.sort((a, b) => b.similarity - a.similarity);
+  } else if (sortBy === "end_date_asc") {
     // 마감 임박순: apply_end_dt 오름차순. null/빈값은 뒤로
     copy.sort((a, b) => {
       const aEnd = a.apply_end_dt || "9999-12-31";
@@ -115,6 +160,10 @@ function sortResultsClientSide(
   return copy;
 }
 
+function toServerSortBy(sortBy: SortBy): ServerSortBy {
+  return sortBy === "similarity_desc" ? "end_date_asc" : sortBy;
+}
+
 export default function Home() {
   const [query, setQuery] = useState("");
   const [filterCategory, setFilterCategory] = useState<string>(ALL);
@@ -131,13 +180,20 @@ export default function Home() {
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [loginId, setLoginId] = useState("");
   const [password, setPassword] = useState("");
+  const [signupRegion, setSignupRegion] = useState<string>(ALL);
+  const [signupCategory, setSignupCategory] = useState<string>(ALL);
+  const [signupAge, setSignupAge] = useState("");
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [savedFilter, setSavedFilter] = useState<SavedFilter | null>(null);
   const [scrappedIds, setScrappedIds] = useState<Set<number>>(new Set());
   const [scrappedItems, setScrappedItems] = useState<SearchResult[]>([]);
   const [scrapsLoading, setScrapsLoading] = useState(false);
   const [showScrappedOnly, setShowScrappedOnly] = useState(false);
+  const [savedChats, setSavedChats] = useState<SavedChat[]>([]);
+  const [savedChatsLoading, setSavedChatsLoading] = useState(false);
+  const [savedChatsSetupRequired, setSavedChatsSetupRequired] = useState(false);
   const [authMessage, setAuthMessage] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
 
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -145,14 +201,14 @@ export default function Home() {
   const [chatLoading, setChatLoading] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
+  const chatAbortRef = useRef<AbortController | null>(null);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
 
   const [showClosed, setShowClosed] = useState(false);
 
   // 첫 화면 모집중 공고 모드 (검색어/필터 없이 진입했을 때)
   const PAGE_SIZE = 20;
-  const [sortBy, setSortBy] = useState<"end_date_asc" | "start_date_desc">(
-    "end_date_asc"
-  );
+  const [sortBy, setSortBy] = useState<SortBy>("end_date_asc");
   const [browseOffset, setBrowseOffset] = useState(0);
   const [browseHasMore, setBrowseHasMore] = useState(false);
   const [browseLoading, setBrowseLoading] = useState(false);
@@ -176,21 +232,49 @@ export default function Home() {
     setScrappedIds(ids);
   }, []);
 
+  const loadSavedChats = useCallback(async () => {
+    setSavedChatsLoading(true);
+    try {
+      const res = await fetch("/api/user/saved-chats", { cache: "no-store" });
+      if (!res.ok) {
+        if (res.status === 401) {
+          setSavedChats([]);
+          setSavedChatsSetupRequired(false);
+          return;
+        }
+        throw new Error(await readApiError(res, "저장 답변을 불러오지 못했어요."));
+      }
+      const data = await res.json().catch(() => ({}));
+      setSavedChats((data.saved_chats ?? []) as SavedChat[]);
+      setSavedChatsSetupRequired(Boolean(data.setup_required));
+    } catch (e) {
+      setSavedChats([]);
+      setSavedChatsSetupRequired(false);
+      setAuthMessage(
+        e instanceof Error ? e.message : "저장 답변을 불러오지 못했어요."
+      );
+    } finally {
+      setSavedChatsLoading(false);
+    }
+  }, []);
+
   const loadSession = useCallback(async () => {
     const res = await fetch("/api/auth/me", { cache: "no-store" });
     const data = await res.json().catch(() => ({}));
     setCurrentUser(data.user ?? null);
     setSavedFilter(data.filter ?? null);
     if (data.user) {
-      await loadScraps();
+      await Promise.all([loadScraps(), loadSavedChats()]);
     } else {
       setScrappedIds(new Set());
       setScrappedItems([]);
+      setSavedChats([]);
+      setSavedChatsSetupRequired(false);
     }
     if (data.filter_error) {
       setAuthMessage(`필터 조회 오류: ${data.filter_error}`);
     }
-  }, [loadScraps]);
+  }, [loadSavedChats, loadScraps]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -201,7 +285,7 @@ export default function Home() {
   const loadOpenAnnouncements = useCallback(
     async (
       offset: number,
-      sort: "end_date_asc" | "start_date_desc",
+      sort: ServerSortBy,
       append: boolean
     ) => {
       setBrowseLoading(true);
@@ -243,14 +327,18 @@ export default function Home() {
   // 첫 진입 시 자동 호출
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    void loadOpenAnnouncements(0, sortBy, false);
+    void loadOpenAnnouncements(0, toServerSortBy(sortBy), false);
     // 첫 진입 시 1회만 실행
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function handleSortChange(next: "end_date_asc" | "start_date_desc") {
+  function handleSortChange(next: SortBy) {
     if (next === sortBy) return;
     setSortBy(next);
+    if (next === "similarity_desc") {
+      setResults((prev) => sortResultsClientSide(prev, next));
+      return;
+    }
     if (searched) {
       if (lastSearchQuery === "") {
         // 필터-only 검색 모드: handleSearch 다시 호출 (서버 정렬)
@@ -272,18 +360,35 @@ export default function Home() {
       void handleSearch({ appendOffset: browseOffset });
     } else {
       // 첫 화면 모드 더보기
-      void loadOpenAnnouncements(browseOffset, sortBy, true);
+      void loadOpenAnnouncements(browseOffset, toServerSortBy(sortBy), true);
     }
+  }
+
+  function showToast(message: string) {
+    setToastMessage(message);
+    window.setTimeout(() => {
+      setToastMessage((current) => (current === message ? null : current));
+    }, 2500);
   }
 
   async function handleAuthSubmit() {
     setAuthLoading(true);
     setAuthMessage(null);
     try {
+      let payload: Record<string, unknown> = { login_id: loginId, password };
+      if (authMode === "signup") {
+        const targetAge = parseTargetAge(signupAge);
+        if (signupAge.trim() && targetAge === null) {
+          setAuthMessage("나이는 0~120 사이의 숫자로 입력해주세요.");
+          setAuthLoading(false);
+          return;
+        }
+        payload = { ...payload, region: signupRegion, category: signupCategory, target_age: targetAge };
+      }
       const res = await fetch(`/api/auth/${authMode}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ login_id: loginId, password }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         throw new Error(
@@ -296,6 +401,11 @@ export default function Home() {
       const data = await res.json();
       setCurrentUser(data.user);
       setPassword("");
+      if (authMode === "signup") {
+        setSignupRegion(ALL);
+        setSignupCategory(ALL);
+        setSignupAge("");
+      }
       setAuthMessage(authMode === "login" ? "로그인했습니다." : "회원가입했습니다.");
       // 로그인/회원가입 시 챗봇 초기화 (이전 비로그인 컨텍스트 답변 비우기)
       setChatMessages([]);
@@ -315,6 +425,8 @@ export default function Home() {
     setSavedFilter(null);
     setScrappedIds(new Set());
     setScrappedItems([]);
+    setSavedChats([]);
+    setSavedChatsSetupRequired(false);
     setShowScrappedOnly(false);
     setAuthMessage("로그아웃했습니다.");
     // 챗봇 상태 초기화 (로그인 사용자 컨텍스트로 받았던 답변 비우기)
@@ -354,6 +466,88 @@ export default function Home() {
       setScrappedItems((prev) => prev.filter((item) => item.id !== annId));
     }
     setAuthMessage(isScrapped ? "스크랩을 해제했습니다." : "스크랩했습니다.");
+  }
+
+  async function saveCurrentChat() {
+    if (!currentUser) {
+      setAuthMessage("로그인하면 저장 가능해요.");
+      return;
+    }
+    if (chatMessages.length === 0) {
+      showToast("저장할 대화가 없습니다.");
+      return;
+    }
+
+    const content = buildChatTranscript(chatMessages);
+    const annIds = collectChatAnnIds(chatMessages);
+
+    const res = await fetch("/api/user/saved-chats", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        content,
+        ann_ids: annIds,
+      }),
+    });
+
+    if (!res.ok) {
+      const message = await readApiError(res, "챗봇 대화 저장에 실패했어요.");
+      if (res.status === 503) {
+        setSavedChatsSetupRequired(true);
+      }
+      setAuthMessage(message);
+      showToast(message);
+      return;
+    }
+
+    const data = await res.json().catch(() => ({}));
+    if (data.saved_chat) {
+      setSavedChats((prev) => [data.saved_chat as SavedChat, ...prev]);
+    } else {
+      await loadSavedChats();
+    }
+    setAuthMessage("챗봇 대화를 저장했습니다.");
+    showToast("챗봇 대화를 저장했습니다.");
+  }
+
+  // "새 채팅 시작" 버튼 클릭 — 답변 생성 중이면 확인 모달 먼저
+  function requestNewChat() {
+    if (chatLoading) {
+      setShowLeaveConfirm(true);
+      return;
+    }
+    startNewChat();
+  }
+
+  function startNewChat() {
+    // 진행 중인 답변 요청 취소 — 응답이 새 채팅에 섞이지 않도록
+    if (chatAbortRef.current) {
+      chatAbortRef.current.abort();
+      chatAbortRef.current = null;
+    }
+    setChatLoading(false);
+    setChatMessages([]);
+    setChatInput("");
+    setChatError(null);
+    setShowLeaveConfirm(false);
+    showToast("새 채팅을 시작했습니다.");
+  }
+
+  async function deleteSavedChat(id: number) {
+    const res = await fetch("/api/user/saved-chats", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+
+    if (!res.ok) {
+      setAuthMessage(await readApiError(res, "저장 답변 삭제에 실패했어요."));
+      return;
+    }
+
+    setSavedChats((prev) => prev.filter((chat) => chat.id !== id));
+    setAuthMessage("저장 답변을 삭제했습니다.");
+    showToast("저장 답변을 삭제했습니다.");
   }
 
   useEffect(() => {
@@ -441,7 +635,7 @@ export default function Home() {
   }
 
   async function handleSearch(options?: {
-    sortOverride?: "end_date_asc" | "start_date_desc";
+    sortOverride?: ServerSortBy;
     appendOffset?: number; // 더보기용. 지정 시 append 모드
   }) {
     const trimmed = query.trim();
@@ -453,7 +647,8 @@ export default function Home() {
       filterStatus !== ALL;
 
     const isAppend = options?.appendOffset !== undefined;
-    const effectiveSortBy = options?.sortOverride ?? sortBy;
+    const effectiveSortBy: ServerSortBy =
+      options?.sortOverride ?? toServerSortBy(sortBy);
     const effectiveOffset = options?.appendOffset ?? 0;
 
     if (!trimmed && !hasFilter) {
@@ -527,12 +722,19 @@ export default function Home() {
     setLastSearchQuery("");
     // 검색 모드 종료 → 첫 화면(모집중 공고)으로 복귀
     setSearched(false);
-    void loadOpenAnnouncements(0, sortBy, false);
+    void loadOpenAnnouncements(0, toServerSortBy(sortBy), false);
   }
 
   async function handleChatSend() {
     const trimmed = chatInput.trim();
     if (!trimmed || chatLoading) return;
+
+    // 이전 요청이 남아있으면 취소
+    if (chatAbortRef.current) {
+      chatAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    chatAbortRef.current = controller;
 
     const userMessage: ChatMessage = { role: "user", content: trimmed };
     setChatMessages((prev) => [...prev, userMessage]);
@@ -548,11 +750,14 @@ export default function Home() {
           message: trimmed,
           history: chatMessages.slice(-8),
         }),
+        signal: controller.signal,
       });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error ?? "챗봇 답변 생성 중 오류가 발생했어요.");
       }
+      // 새 채팅으로 갈아탔거나 다른 요청이 시작됐으면 결과 무시
+      if (chatAbortRef.current !== controller) return;
       const top = ((data.results ?? []) as SearchResult[])
         .filter(
           (r) =>
@@ -569,7 +774,10 @@ export default function Home() {
       };
       setChatMessages((prev) => [...prev, reply]);
     } catch (e) {
+      // AbortError는 사용자가 새 채팅 시작/재요청한 정상 흐름 — 무시
+      if (e instanceof DOMException && e.name === "AbortError") return;
       console.error(e);
+      if (chatAbortRef.current !== controller) return;
       const message = "에러 발생. 다시 시도해주세요.";
       setChatError(message);
       setChatMessages((prev) => [
@@ -577,7 +785,10 @@ export default function Home() {
         { role: "assistant", content: message },
       ]);
     } finally {
-      setChatLoading(false);
+      if (chatAbortRef.current === controller) {
+        chatAbortRef.current = null;
+        setChatLoading(false);
+      }
     }
   }
 
@@ -637,6 +848,12 @@ export default function Home() {
             setLoginId={setLoginId}
             password={password}
             setPassword={setPassword}
+            signupRegion={signupRegion}
+            setSignupRegion={setSignupRegion}
+            signupCategory={signupCategory}
+            setSignupCategory={setSignupCategory}
+            signupAge={signupAge}
+            setSignupAge={setSignupAge}
             currentUser={currentUser}
             authLoading={authLoading}
             authMessage={authMessage}
@@ -768,6 +985,19 @@ export default function Home() {
               ) : null}
             </div>
             <div className="flex items-center gap-1 rounded-lg border border-zinc-200 bg-white p-0.5 text-sm dark:border-zinc-700 dark:bg-zinc-900">
+              {searched && lastSearchQuery !== "" && (
+                <button
+                  type="button"
+                  onClick={() => handleSortChange("similarity_desc")}
+                  className={`rounded-md px-3 py-1 transition-colors ${
+                    sortBy === "similarity_desc"
+                      ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                      : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  }`}
+                >
+                  유사도순
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => handleSortChange("end_date_asc")}
@@ -849,6 +1079,15 @@ export default function Home() {
 
       </main>
 
+      {toastMessage && (
+        <div
+          role="status"
+          className="fixed left-1/2 top-5 z-[60] -translate-x-1/2 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white shadow-lg dark:bg-zinc-100 dark:text-zinc-900"
+        >
+          {toastMessage}
+        </div>
+      )}
+
       {chatOpen && (
         <div className="fixed inset-x-4 bottom-24 top-20 z-40 flex flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-950 sm:left-auto sm:right-6 sm:top-auto sm:h-[600px] sm:max-h-[calc(100vh-7rem)] sm:w-[400px]">
           <ChatPanel
@@ -861,9 +1100,56 @@ export default function Home() {
             onClose={() => setChatOpen(false)}
             currentUser={currentUser}
             savedFilter={savedFilter}
+            savedChats={savedChats}
+            savedChatsLoading={savedChatsLoading}
+            savedChatsSetupRequired={savedChatsSetupRequired}
             scrappedIds={scrappedIds}
             onToggleScrap={toggleScrap}
+            onSaveChat={saveCurrentChat}
+            onDeleteSavedChat={deleteSavedChat}
+            onNewChat={requestNewChat}
           />
+        </div>
+      )}
+
+      {showLeaveConfirm && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 px-4"
+          onClick={() => setShowLeaveConfirm(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl dark:bg-zinc-900"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+              새 채팅을 시작할까요?
+            </h3>
+            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
+              답변을 생성하고 있습니다. 이 채팅방에서 나가시겠습니까?
+              <br />
+              <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                (채팅은 저장되지 않고 즉시 종료됩니다.)
+              </span>
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowLeaveConfirm(false)}
+                className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+              >
+                머무르기
+              </button>
+              <button
+                type="button"
+                onClick={startNewChat}
+                className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+              >
+                네, 나갈게요
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -901,8 +1187,14 @@ function ChatPanel({
   onClose,
   currentUser,
   savedFilter,
+  savedChats,
+  savedChatsLoading,
+  savedChatsSetupRequired,
   scrappedIds,
   onToggleScrap,
+  onSaveChat,
+  onDeleteSavedChat,
+  onNewChat,
 }: {
   messages: ChatMessage[];
   input: string;
@@ -913,9 +1205,17 @@ function ChatPanel({
   onClose: () => void;
   currentUser: User | null;
   savedFilter: SavedFilter | null;
+  savedChats: SavedChat[];
+  savedChatsLoading: boolean;
+  savedChatsSetupRequired: boolean;
   scrappedIds: Set<number>;
   onToggleScrap: (annId: number) => void;
+  onSaveChat: () => void;
+  onDeleteSavedChat: (id: number) => void;
+  onNewChat: () => void;
 }) {
+  const [showSavedChats, setShowSavedChats] = useState(false);
+  const [openSavedChatId, setOpenSavedChatId] = useState<number | null>(null);
   // 빈 대화 상태 안내 분기용 — 저장된 필터 요약
   const savedFilterParts: string[] = [];
   if (savedFilter?.regions?.[0] && savedFilter.regions[0] !== "전국") {
@@ -956,7 +1256,125 @@ function ChatPanel({
         </button>
       </div>
 
+      <div className="flex flex-wrap gap-2 border-b border-zinc-200 px-4 py-2 dark:border-zinc-700">
+        <button
+          type="button"
+          onClick={onNewChat}
+          disabled={messages.length === 0 && !input.trim()}
+          className="rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+        >
+          새 채팅 시작
+        </button>
+        <button
+          type="button"
+          onClick={onSaveChat}
+          disabled={!currentUser || messages.length === 0 || loading}
+          title={
+            currentUser
+              ? messages.length === 0
+                ? "저장할 대화가 없습니다."
+                : loading
+                  ? "답변 생성 후 저장할 수 있습니다."
+                : "현재 대화 전체 저장"
+              : "로그인하면 저장 가능"
+          }
+          className="rounded-md border border-blue-200 px-2.5 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-blue-900 dark:text-blue-300 dark:hover:bg-blue-950"
+        >
+          대화 저장
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowSavedChats((value) => !value)}
+          disabled={!currentUser}
+          title={currentUser ? "저장한 대화 보기" : "로그인하면 저장 가능"}
+          className="rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+        >
+          저장 목록
+        </button>
+        {!currentUser && (
+          <span className="self-center text-[11px] text-zinc-500">
+            로그인하면 저장 가능
+          </span>
+        )}
+      </div>
+
       <div className="flex-1 overflow-y-auto p-4">
+        {showSavedChats && (
+          <div className="mb-4 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-900">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">
+                저장한 답변
+              </p>
+              <span className="text-xs text-zinc-500">
+                {savedChats.length}개
+              </span>
+            </div>
+            {!currentUser ? (
+              <p className="mt-3 text-xs text-zinc-500">
+                로그인하면 답변을 저장하고 다시 볼 수 있어요.
+              </p>
+            ) : savedChatsSetupRequired ? (
+              <p className="mt-3 text-xs leading-5 text-amber-700 dark:text-amber-300">
+                saved_chats 테이블 적용 전입니다.
+                Database/saved_chats_ddl.sql을 Supabase에 적용하면 저장 목록이 표시돼요.
+              </p>
+            ) : savedChatsLoading ? (
+              <p className="mt-3 text-xs text-zinc-500">불러오는 중...</p>
+            ) : savedChats.length === 0 ? (
+              <p className="mt-3 text-xs text-zinc-500">
+                아직 저장한 답변이 없습니다.
+              </p>
+            ) : (
+              <ul className="mt-3 space-y-2">
+                {savedChats.map((chat) => (
+                  <li
+                    key={chat.id}
+                    className="rounded-md border border-zinc-200 bg-white p-3 dark:border-zinc-700 dark:bg-zinc-950"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <time className="text-xs text-zinc-500">
+                        {formatSavedChatDate(chat.created_dt)}
+                      </time>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setOpenSavedChatId((current) =>
+                              current === chat.id ? null : chat.id
+                            )
+                          }
+                          className="rounded px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                        >
+                          {openSavedChatId === chat.id ? "접기" : "대화 보기"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onDeleteSavedChat(chat.id)}
+                          className="rounded px-2 py-1 text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
+                        >
+                          삭제
+                        </button>
+                      </div>
+                    </div>
+                    <p
+                      className={`mt-2 overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-zinc-700 dark:text-zinc-300 ${
+                        openSavedChatId === chat.id ? "max-h-72" : "max-h-16"
+                      }`}
+                    >
+                      {chat.content}
+                    </p>
+                    {chat.ann_ids.length > 0 && (
+                      <p className="mt-2 break-words text-[11px] text-zinc-500">
+                        추천 ID: {chat.ann_ids.join(", ")}
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
         {messages.length === 0 && !loading && (
           <div className="space-y-3">
             {currentUser && hasSavedFilter ? (
@@ -1084,6 +1502,12 @@ function AuthPanel({
   setLoginId,
   password,
   setPassword,
+  signupRegion,
+  setSignupRegion,
+  signupCategory,
+  setSignupCategory,
+  signupAge,
+  setSignupAge,
   currentUser,
   authLoading,
   authMessage,
@@ -1102,6 +1526,12 @@ function AuthPanel({
   setLoginId: (value: string) => void;
   password: string;
   setPassword: (value: string) => void;
+  signupRegion: string;
+  setSignupRegion: (value: string) => void;
+  signupCategory: string;
+  setSignupCategory: (value: string) => void;
+  signupAge: string;
+  setSignupAge: (value: string) => void;
   currentUser: User | null;
   authLoading: boolean;
   authMessage: string | null;
@@ -1115,16 +1545,27 @@ function AuthPanel({
   onToggleScrappedOnly: () => void;
 }) {
   if (currentUser) {
+    const isAdmin = currentUser.role === "admin";
     return (
       <section className="w-full rounded-lg border border-zinc-200 bg-white p-3 text-sm dark:border-zinc-700 dark:bg-zinc-900 sm:w-80">
         <div className="mb-2 flex items-center justify-between gap-2">
           <span className="font-medium">{currentUser.login_id}</span>
-          <button
-            onClick={onLogout}
-            className="rounded-md border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            로그아웃
-          </button>
+          <div className="flex items-center gap-1">
+            {isAdmin && (
+              <a
+                href="/admin"
+                className="rounded-md border border-blue-300 bg-blue-50 px-2 py-1 text-xs text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-950 dark:text-blue-200 dark:hover:bg-blue-900"
+              >
+                관리자
+              </a>
+            )}
+            <button
+              onClick={onLogout}
+              className="rounded-md border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              로그아웃
+            </button>
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
           <button
@@ -1207,6 +1648,49 @@ function AuthPanel({
           placeholder="비밀번호"
           className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-950"
         />
+        {authMode === "signup" && (
+          <div className="grid gap-2 rounded-md border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-700 dark:bg-zinc-950">
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              관심정보를 입력하면 맞춤 추천에 바로 활용돼요. (선택)
+            </p>
+            <label className="flex items-center justify-between gap-2 text-xs text-zinc-600 dark:text-zinc-300">
+              <span>지역</span>
+              <select
+                value={signupRegion}
+                onChange={(e) => setSignupRegion(e.target.value)}
+                className="min-w-0 flex-1 rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
+              >
+                {REGIONS.map((opt) => (
+                  <option key={opt} value={opt}>{opt}</option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center justify-between gap-2 text-xs text-zinc-600 dark:text-zinc-300">
+              <span>관심 카테고리</span>
+              <select
+                value={signupCategory}
+                onChange={(e) => setSignupCategory(e.target.value)}
+                className="min-w-0 flex-1 rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
+              >
+                {CATEGORIES.map((opt) => (
+                  <option key={opt} value={opt}>{opt}</option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center justify-between gap-2 text-xs text-zinc-600 dark:text-zinc-300">
+              <span>나이</span>
+              <input
+                type="number"
+                min={0}
+                max={120}
+                value={signupAge}
+                onChange={(e) => setSignupAge(e.target.value)}
+                placeholder="예: 25"
+                className="w-24 rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
+              />
+            </label>
+          </div>
+        )}
         <button
           onClick={onSubmit}
           disabled={authLoading || !loginId.trim() || !password}

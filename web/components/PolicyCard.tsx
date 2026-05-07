@@ -86,14 +86,8 @@ export function PolicyCard({
     youthSearchKeyword
   )}`;
   const hasTargetTags = Boolean(item.target_tags?.length);
-  const hasExpandableDetails =
-    hasText(item.summary) ||
-    hasText(item.application_method) ||
-    hasText(item.required_documents) ||
-    hasText(item.additional_conditions) ||
-    hasText(item.provider) ||
-    hasText(item.target_group) ||
-    hasTargetTags;
+  // 신청방법·제출서류는 항상 자세히 보기에 표시하므로 버튼은 항상 활성화
+  const hasExpandableDetails = true;
 
   return (
     <li className="rounded-lg border border-zinc-200 bg-white p-5 transition-colors hover:border-zinc-300 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:border-zinc-600">
@@ -235,12 +229,16 @@ export function PolicyCard({
           {hasText(item.summary) && (
             <DetailRow label="요약">{item.summary}</DetailRow>
           )}
-          {hasText(item.application_method) && (
-            <DetailRow label="신청 방법">{item.application_method}</DetailRow>
-          )}
-          {hasText(item.required_documents) && (
-            <DetailRow label="제출 서류">{item.required_documents}</DetailRow>
-          )}
+          <DetailRow label="신청 방법">
+            {hasText(item.application_method)
+              ? item.application_method
+              : "공고문/상세 링크 확인 필요"}
+          </DetailRow>
+          <DetailRow label="제출 서류">
+            {hasText(item.required_documents)
+              ? item.required_documents
+              : "공고문 확인 필요"}
+          </DetailRow>
           {hasText(item.additional_conditions) && (
             <DetailRow label="추가 조건">
               {item.additional_conditions}

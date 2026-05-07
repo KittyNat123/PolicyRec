@@ -8,24 +8,33 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ user: null, filter: null });
   }
 
-  const { data: filter, error } = await supabase
-    .from("user_filters")
-    .select("filter_id,filter_name,regions,categories,target_age,created_dt")
-    .eq("login_id", loginId)
-    .order("created_dt", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const [filterResult, userResult] = await Promise.all([
+    supabase
+      .from("user_filters")
+      .select("filter_id,filter_name,regions,categories,target_age,created_dt")
+      .eq("login_id", loginId)
+      .order("created_dt", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabase.from("users").select("role").eq("login_id", loginId).maybeSingle(),
+  ]);
 
-  if (error) {
+  const role = userResult.data?.role ?? "user";
+
+  if (filterResult.error) {
     return NextResponse.json(
-      { user: { login_id: loginId }, filter: null, filter_error: error.message },
+      {
+        user: { login_id: loginId, role },
+        filter: null,
+        filter_error: filterResult.error.message,
+      },
       { status: 200 }
     );
   }
 
   return NextResponse.json({
-    user: { login_id: loginId },
-    filter: filter ?? null,
+    user: { login_id: loginId, role },
+    filter: filterResult.data ?? null,
   });
 }
 

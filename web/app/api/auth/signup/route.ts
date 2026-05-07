@@ -2,8 +2,28 @@ import { NextRequest, NextResponse } from "next/server";
 import { createSessionToken, hashPassword, SESSION_COOKIE_NAME } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 
+const DEFAULT_FILTER_NAME = "기본 필터";
+
 function normalizeLoginId(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeFilterValue(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "전체") return null;
+  return trimmed;
+}
+
+function normalizeAge(value: unknown): number | null {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 120) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isInteger(parsed) && parsed >= 0 && parsed <= 120) return parsed;
+  }
+  return null;
 }
 
 export async function POST(request: NextRequest) {
@@ -51,6 +71,19 @@ export async function POST(request: NextRequest) {
     }
 
     await supabase.from("user_info").insert({ login_id: loginId });
+
+    const region = normalizeFilterValue(body.region);
+    const category = normalizeFilterValue(body.category);
+    const targetAge = normalizeAge(body.target_age);
+    if (region || category || targetAge !== null) {
+      await supabase.from("user_filters").insert({
+        login_id: loginId,
+        filter_name: DEFAULT_FILTER_NAME,
+        regions: region ? [region] : [],
+        categories: category ? [category] : [],
+        target_age: targetAge,
+      });
+    }
 
     const response = NextResponse.json({ user: { login_id: loginId } });
     response.cookies.set(SESSION_COOKIE_NAME, createSessionToken(loginId), {

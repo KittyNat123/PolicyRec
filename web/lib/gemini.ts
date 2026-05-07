@@ -40,9 +40,16 @@ const CHAT_MODELS = [
 const EMBEDDING_DIMENSION = 768;
 const POLICY_SYSTEM_INSTRUCTION = `
 너는 정부 지원사업 추천 전문가다.
-사용자의 상황에 맞는 정책을 추천하고,
-가능하면 신청 방법까지 설명하라.
+사용자의 상황에 맞는 정책을 추천하고, 신청 방법과 필요 서류까지 짧게 안내하라.
 만약 상세 링크가 없다면, 대안 방법이나 추가 정보를 안내하라.
+
+[신청 가이드 규칙 — 매우 중요]
+- 검색 결과에 적혀 있는 "신청방법", "제출서류" 값만 사용하라. 절대 추측·창작하지 마라.
+- 검색 결과에 "(정보 없음 ...)"으로 표시된 항목은 그 문구 그대로 받아들이고,
+  신청방법이 없으면 "신청방법은 공고문/상세 링크 확인 필요",
+  제출서류가 없으면 "제출서류는 공고문 확인 필요"라고 답하라.
+- 서류 이름이나 신청 절차를 임의로 만들어내지 마라. 일반 상식이라도 추측은 금지다.
+- 신청방법이 길면 핵심 한두 가지(예: "온라인 신청 (xx포털)")로 줄여 말하라.
 
 [개인 맞춤 추천 요청 규칙 — 매우 중요]
 사용자가 "나에게 맞는", "나랑 맞는", "추천", "맞춤" 같은 개인 맞춤형 추천을 요청했는데
@@ -446,8 +453,12 @@ function compactPolicy(policy: RagPolicyContext, index: number) {
     policy.apply_start_dt ? `시작일: ${policy.apply_start_dt}` : null,
     policy.apply_end_dt ? `마감일: ${policy.apply_end_dt}` : null,
     policy.summary ? `요약: ${policy.summary}` : null,
-    policy.application_method ? `신청방법: ${policy.application_method}` : null,
-    policy.required_documents ? `제출서류: ${policy.required_documents}` : null,
+    policy.application_method
+      ? `신청방법: ${policy.application_method}`
+      : "신청방법: (정보 없음 — 공고문/상세 링크 확인 필요)",
+    policy.required_documents
+      ? `제출서류: ${policy.required_documents}`
+      : "제출서류: (정보 없음 — 공고문 확인 필요)",
     policy.additional_conditions ? `추가조건: ${policy.additional_conditions}` : null,
     policy.detail_url
       ? `상세링크: ${policy.detail_url}`
@@ -482,9 +493,17 @@ export async function generatePolicyAnswer({
 - 사용자 프로필 정보가 있으면 자연스럽게 활용해 맞춤 추천한다 (정보가 없으면 무시).
 - 사용자 프로필이 없는데 "나에게 맞는", "추천해줘" 같은 맞춤 요청이 오면, 정책 나열 대신 거주지/나이/관심분야를 먼저 물어본다.
 - 상세 링크가 없는 정책은 공식 링크가 없다고 설명하고, 신청 방법/제공 기관/공고명 검색 같은 대안 확인 방법을 안내한다.
-- 답변은 3~6문장 정도로 쓰고, 마지막에 추천 정책명을 1~3개만 짧게 나열한다.
 - 사용자가 비교/조건을 물으면 조건에 맞는 이유를 간단히 말한다.
 - 마크다운 굵게 표시는 쓰지 않는다.
+
+[추천 정책 신청 가이드 형식]
+정책을 1~3개 추천한다. 각 정책마다 아래 4줄 형식으로만 짧게 적는다:
+  • 정책명 (기관)
+  • 추천 이유: (사용자 조건과 맞는 점 한 줄)
+  • 신청방법: (검색결과의 신청방법 값. "(정보 없음 ...)"이면 "공고문/상세 링크 확인 필요")
+  • 제출서류: (검색결과의 제출서류 값을 짧게. "(정보 없음 ...)"이면 "공고문 확인 필요")
+  • 상세링크가 있으면 "상세링크 확인" 한 줄, 없으면 "공식 링크 없음 — 공고명으로 검색 필요" 한 줄.
+검색결과에 없는 신청 절차나 서류명을 절대 만들어내지 마라.
 
 ${userInfo ? userInfo + "\n\n" : ""}최근 대화:
 ${recentHistory || "없음"}
