@@ -146,7 +146,13 @@ function buildFilterConflicts({
   return conflicts;
 }
 
-function chooseEmbeddingQuery(query: string, selfQuery: SelfQueryFilters | null) {
+function chooseEmbeddingQuery(
+  query: string,
+  selfQuery: SelfQueryFilters | null,
+  uiFiltersComplete: boolean
+) {
+  // UI에서 카테고리+지역 둘 다 설정된 경우: 원래 쿼리로 임베딩 (0건 방지)
+  if (uiFiltersComplete) return query;
   const semanticQuery = selfQuery?.applied ? selfQuery.semantic_query.trim() : "";
   return semanticQuery.replace(/\s/g, "").length >= 2 ? semanticQuery : query;
 }
@@ -451,7 +457,8 @@ export async function POST(request: NextRequest) {
     const effectiveFilterCategory = filterCategory ?? selfQuery?.category ?? null;
     const effectiveFilterRegion = filterRegion ?? selfQuery?.region ?? null;
     const effectiveUserAge = userAge ?? selfQuery?.target_age ?? null;
-    const embeddingQuery = chooseEmbeddingQuery(query, selfQuery);
+    const uiFiltersComplete = Boolean(filterCategory && filterRegion);
+    const embeddingQuery = chooseEmbeddingQuery(query, selfQuery, uiFiltersComplete);
 
     // ----- 2. 검색어 → 임베딩 -----
     const queryEmbedding = await getQueryEmbedding(embeddingQuery);
