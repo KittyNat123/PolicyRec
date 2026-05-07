@@ -200,13 +200,25 @@ function isPrimarySchema(schema: AnnouncementSchema) {
   return schema === "primary_extended" || schema === "primary";
 }
 
+// 첫 화면 모집중 공고용 추가 옵션 (정렬/페이지네이션/모집중 필터)
+type FilterQueryOptions = {
+  sortBy?: "end_date_asc" | "start_date_desc";
+  offset?: number;
+  limit?: number;
+  onlyOpen?: boolean;
+};
+
 function buildFilteredAnnouncementsQuery(
   schema: AnnouncementSchema,
   filterCategory: string | null,
-  filterRegion: string | null
+  filterRegion: string | null,
+  options: FilterQueryOptions = {}
 ) {
   const categoryColumn = isPrimarySchema(schema) ? "s_category" : "category";
   const endDateColumn = isPrimarySchema(schema) ? "apply_end_dt" : "end_date";
+  const startDateColumn = isPrimarySchema(schema)
+    ? "apply_start_dt"
+    : "start_date";
   let tableQuery = supabase.from("announcements").select(columnsForSchema(schema));
 
   if (filterCategory) {
@@ -215,17 +227,44 @@ function buildFilteredAnnouncementsQuery(
   if (filterRegion) {
     tableQuery = tableQuery.in("region", [filterRegion, NATIONWIDE_REGION]);
   }
+  if (options.onlyOpen) {
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    tableQuery = tableQuery.gte(endDateColumn, today);
+  }
 
-  return tableQuery
-    .order(endDateColumn, { ascending: true })
-    .limit(FILTER_ONLY_MATCH_COUNT);
+  // 정렬
+  if (options.sortBy === "start_date_desc") {
+    tableQuery = tableQuery
+      .order(startDateColumn, { ascending: false, nullsFirst: false })
+      .order("id", { ascending: false });
+  } else {
+    // 기본: 마감 임박순
+    tableQuery = tableQuery
+      .order(endDateColumn, { ascending: true, nullsFirst: false })
+      .order("id", { ascending: true });
+  }
+
+  // 페이지네이션 (offset/limit 지정 시) 또는 기본 상한
+  const offset = options.offset ?? 0;
+  const limit = options.limit ?? FILTER_ONLY_MATCH_COUNT;
+  tableQuery = tableQuery.range(offset, offset + limit - 1);
+
+  return tableQuery;
 }
 
 async function searchByFiltersOnly(
   filterCategory: string | null,
   filterRegion: string | null,
-  userAge: number | null
+  userAge: number | null,
+  options: FilterQueryOptions = {}
 ) {
+  // hasMore 판단을 위해 limit+1 개 가져옴 (이후 잘라냄)
+  const requestedLimit = options.limit ?? FILTER_ONLY_MATCH_COUNT;
+  const probeOptions: FilterQueryOptions = {
+    ...options,
+    limit: requestedLimit + 1,
+  };
+
   let data: unknown[] | null = null;
   let error: SupabaseLikeError | null = null;
 
@@ -233,7 +272,8 @@ async function searchByFiltersOnly(
     const result = await buildFilteredAnnouncementsQuery(
       schema,
       filterCategory,
-      filterRegion
+      filterRegion,
+      probeOptions
     );
     data = result.data as unknown[] | null;
     error = result.error;
@@ -241,21 +281,23 @@ async function searchByFiltersOnly(
   }
 
   if (error) {
-    return { results: [], error };
+    return { results: [], hasMore: false, error };
   }
 
   const rows = (data ?? []) as unknown as Array<Record<string, unknown>>;
-  const results = applyResultFilters(
+  const filtered = applyResultFilters(
     rows,
     filterCategory,
     filterRegion,
     userAge
-  ).map((row) => ({
+  );
+  const hasMore = filtered.length > requestedLimit;
+  const results = filtered.slice(0, requestedLimit).map((row) => ({
     ...normalizeResultRow(row),
     similarity: 0,
   }));
 
-  return { results, error: null };
+  return { results, hasMore, error: null };
 }
 
 async function selectAnnouncementRowsByIds(ids: number[]) {
@@ -290,11 +332,28 @@ export async function POST(request: NextRequest) {
         : null;
     const userAge = typeof body.user_age === "number" ? body.user_age : null;
 
+    // 첫 화면 모집중 공고용 추가 파라미터 (검색어 없을 때만 의미 있음)
+    const sortBy: "end_date_asc" | "start_date_desc" =
+      body.sort_by === "start_date_desc" ? "start_date_desc" : "end_date_asc";
+    const offset =
+      typeof body.offset === "number" && body.offset >= 0 ? body.offset : 0;
+    const limit =
+      typeof body.limit === "number" && body.limit > 0
+        ? Math.min(body.limit, 100)
+        : null; // null이면 기존 기본값(FILTER_ONLY_MATCH_COUNT) 사용
+    const onlyOpen = body.only_open === true;
+
     if (!query) {
       const filterOnlyResult = await searchByFiltersOnly(
         filterCategory,
         filterRegion,
-        userAge
+        userAge,
+        {
+          sortBy,
+          offset,
+          limit: limit ?? undefined,
+          onlyOpen,
+        }
       );
 
       if (filterOnlyResult.error) {
@@ -306,6 +365,7 @@ export async function POST(request: NextRequest) {
 
       return NextResponse.json({
         results: filterOnlyResult.results,
+        hasMore: filterOnlyResult.hasMore,
         rpc_used: "table_filter",
       });
     }

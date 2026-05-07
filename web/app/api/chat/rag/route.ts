@@ -3,8 +3,44 @@ import {
   generatePolicyAnswer,
   getQueryEmbedding,
 } from "@/lib/gemini";
-import type { RagHistoryMessage, RagPolicyContext } from "@/lib/gemini";
+import type {
+  RagHistoryMessage,
+  RagPolicyContext,
+  RagUserContext,
+} from "@/lib/gemini";
+import { getLoginIdFromRequest } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+
+// 로그인 사용자의 저장된 필터를 챗봇 컨텍스트로 변환
+async function loadUserContext(
+  request: NextRequest
+): Promise<RagUserContext | undefined> {
+  const loginId = getLoginIdFromRequest(request);
+  if (!loginId) return undefined;
+
+  const { data: filter } = await supabase
+    .from("user_filters")
+    .select("regions,categories,target_age")
+    .eq("login_id", loginId)
+    .order("created_dt", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const regions = (filter?.regions ?? []) as unknown[];
+  const categories = (filter?.categories ?? []) as unknown[];
+  const region =
+    typeof regions[0] === "string" && regions[0] !== "전국" && regions[0] !== "전체"
+      ? (regions[0] as string)
+      : null;
+  const category =
+    typeof categories[0] === "string" && categories[0] !== "전체"
+      ? (categories[0] as string)
+      : null;
+  const targetAge =
+    typeof filter?.target_age === "number" ? filter.target_age : null;
+
+  return { loginId, region, category, targetAge };
+}
 
 export const dynamic = "force-dynamic";
 
@@ -246,6 +282,52 @@ function isCasualMessage(message: string) {
   );
 }
 
+// "나에게 맞는 정책 추천" 같은 개인 맞춤 요청 감지
+function isPersonalizedRequest(message: string): boolean {
+  const normalized = message.replace(/\s/g, "").toLowerCase();
+  const signals = [
+    "나에게맞",
+    "나한테맞",
+    "나랑맞",
+    "나에게적합",
+    "맞춤",
+    "추천해줘",
+    "추천해주세요",
+    "추천부탁",
+    "맞는정책",
+    "내게맞",
+  ];
+  return signals.some((signal) => normalized.includes(signal));
+}
+
+// 사용자 프로필이 비어있는지 확인
+function hasUserProfile(userContext: RagUserContext | undefined): boolean {
+  if (!userContext) return false;
+  return Boolean(
+    userContext.region ||
+      userContext.category ||
+      (userContext.targetAge !== null && userContext.targetAge !== undefined)
+  );
+}
+
+// 저장된 필터를 첫 메시지 prefix로 변환
+function buildSavedFilterPrefix(userContext: RagUserContext): string {
+  const parts: string[] = [];
+  if (userContext.region) parts.push(`지역: ${userContext.region}`);
+  if (userContext.category) parts.push(`카테고리: ${userContext.category}`);
+  if (userContext.targetAge !== null && userContext.targetAge !== undefined) {
+    parts.push(`나이: ${userContext.targetAge}세`);
+  }
+  if (parts.length === 0) return "";
+  return `현재 저장된 필터(${parts.join(", ")})를 바탕으로 관련 정책을 추천합니다.\n\n`;
+}
+
+const ASK_PROFILE_REPLY = `더 정확한 추천을 위해 몇 가지만 알려주세요!
+1. 어디에 거주하세요? (예: 서울, 제주, 부산 등)
+2. 나이가 어떻게 되세요? (또는 연령대)
+3. 어떤 분야가 궁금하세요? (창업/주거/취업/자금 등)
+이 중 알려주시는 만큼 더 적합한 정책을 찾아드릴게요.`;
+
 function buildGeneralAnswer(question: string) {
   const normalized = question.replace(/\s/g, "");
   if (
@@ -277,6 +359,19 @@ export async function POST(request: NextRequest) {
         reply: buildGeneralAnswer(question),
         results: [],
         intent: "general",
+      });
+    }
+
+    // 로그인 사용자 컨텍스트 먼저 로드
+    const userContext = await loadUserContext(request);
+
+    // 맞춤 추천 요청인데 사용자 프로필이 없으면, 검색 건너뛰고 정보만 묻기
+    // (비회원 + "나에게 맞는 정책" 케이스)
+    if (isPersonalizedRequest(question) && !hasUserProfile(userContext)) {
+      return NextResponse.json({
+        reply: ASK_PROFILE_REPLY,
+        results: [],
+        intent: "ask_profile",
       });
     }
 
@@ -342,12 +437,24 @@ export async function POST(request: NextRequest) {
       };
     });
 
+    // userContext는 위에서 이미 로드됨 (로그인 사용자 저장 필터)
+
     let reply: string;
     try {
-      reply = await generatePolicyAnswer({ question, policies, history });
+      reply = await generatePolicyAnswer({
+        question,
+        policies,
+        history,
+        userContext,
+      });
     } catch (error) {
       console.warn("[/api/chat/rag] Gemini 답변 생성 실패:", error);
       reply = buildFallbackAnswer(question, policies);
+    }
+
+    // 로그인 + 저장 필터 있고 첫 메시지일 때만, 답변 앞에 안내 prefix 추가
+    if (history.length === 0 && hasUserProfile(userContext) && userContext) {
+      reply = buildSavedFilterPrefix(userContext) + reply;
     }
 
     return NextResponse.json({ reply, results, rpc_used: "hybrid" });

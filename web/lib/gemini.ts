@@ -43,7 +43,33 @@ const POLICY_SYSTEM_INSTRUCTION = `
 사용자의 상황에 맞는 정책을 추천하고,
 가능하면 신청 방법까지 설명하라.
 만약 상세 링크가 없다면, 대안 방법이나 추가 정보를 안내하라.
-한국어로 짧고 실용적으로 답하라.
+
+[개인 맞춤 추천 요청 규칙 — 매우 중요]
+사용자가 "나에게 맞는", "나랑 맞는", "추천", "맞춤" 같은 개인 맞춤형 추천을 요청했는데
+대화 히스토리(시스템 컨텍스트 포함)에 다음 정보가 부족하면, 추천을 시도하지 말고
+필요한 정보를 먼저 친절하게 물어라:
+  - 거주 지역 (시·도 단위)
+  - 나이 (또는 청년/중장년 등 연령대)
+  - 관심 분야 (창업, 주거, 취업, 교육, 자금 지원 등)
+  - 현재 상황 (구직 중/창업 준비 중/재직 중/학생 등)
+
+질문 예시 형식:
+"더 정확한 추천을 위해 몇 가지만 알려주세요!
+1. 어디에 거주하세요? (예: 서울, 경기도, 대구 등)
+2. 나이가 어떻게 되세요? (또는 연령대)
+3. 어떤 분야가 궁금하세요? (창업/주거/취업/자금 등)
+이 중 알려주시는 만큼 더 적합한 정책을 찾아드릴게요."
+
+이미 일부 정보가 있으면, 부족한 정보만 콕 집어서 추가 질문하라.
+정보 없이 여러 카테고리 정책을 나열하는 식의 답변은 절대 하지 마라.
+
+[답변 길이 규칙]
+- 인사/짧은 질문/단순 확인 질문에는 1~2문장으로 짧게 답하라.
+- 정책 추천이나 비교 같은 정보성 질문은 핵심만 5~8줄로 정리하라.
+- 불필요한 도입부("좋은 질문입니다", "안녕하세요" 등)는 생략하고 본론부터 시작하라.
+- 마크다운 굵게(**) 표기는 사용하지 마라.
+- 필요할 때만 길게 쓰고, 답변이 길어질 것 같으면 가장 중요한 정보부터 위로 배치하라.
+한국어로 답하라.
 `.trim();
 
 /**
@@ -99,7 +125,27 @@ export type RagHistoryMessage = {
   content: string;
 };
 
-async function generateWithFallback(prompt: string, maxOutputTokens = 700) {
+// 로그인 사용자의 프로필 컨텍스트 (저장된 필터 + 회원 정보)
+export type RagUserContext = {
+  loginId?: string | null;
+  region?: string | null;
+  category?: string | null;
+  targetAge?: number | null;
+};
+
+function formatUserContext(userContext?: RagUserContext): string {
+  if (!userContext) return "";
+  const parts: string[] = [];
+  if (userContext.region) parts.push(`- 거주 지역: ${userContext.region}`);
+  if (userContext.category) parts.push(`- 관심 카테고리: ${userContext.category}`);
+  if (userContext.targetAge !== null && userContext.targetAge !== undefined) {
+    parts.push(`- 나이: ${userContext.targetAge}세`);
+  }
+  if (parts.length === 0) return "";
+  return `사용자 프로필 (저장된 정보):\n${parts.join("\n")}`;
+}
+
+async function generateWithFallback(prompt: string, maxOutputTokens = 5000) {
   let lastError: unknown = null;
   for (const model of CHAT_MODELS) {
     try {
@@ -112,6 +158,15 @@ async function generateWithFallback(prompt: string, maxOutputTokens = 700) {
           maxOutputTokens,
         },
       });
+
+      // 잘림 진단용 로깅: finishReason이 MAX_TOKENS면 토큰 더 늘려야 함
+      const candidate = response.candidates?.[0];
+      const finishReason = candidate?.finishReason;
+      if (finishReason && finishReason !== "STOP") {
+        console.warn(
+          `[gemini] ${model} finishReason=${finishReason} (응답 잘렸을 수 있음. maxOutputTokens=${maxOutputTokens})`
+        );
+      }
 
       const text = response.text?.trim();
       if (text) return text;
@@ -160,12 +215,15 @@ export async function generatePolicyAnswer({
   question,
   policies,
   history,
+  userContext,
 }: {
   question: string;
   policies: RagPolicyContext[];
   history: RagHistoryMessage[];
+  userContext?: RagUserContext;
 }): Promise<string> {
   const recentHistory = formatRecentHistory(history);
+  const userInfo = formatUserContext(userContext);
   const context =
     policies.length > 0
       ? policies.map(compactPolicy).join("\n\n")
@@ -175,12 +233,14 @@ export async function generatePolicyAnswer({
 규칙:
 - 아래 검색 결과에 있는 정책만 근거로 답한다.
 - 확실하지 않은 내용은 추정하지 말고 "확인 필요"라고 말한다.
+- 사용자 프로필 정보가 있으면 자연스럽게 활용해 맞춤 추천한다 (정보가 없으면 무시).
+- 사용자 프로필이 없는데 "나에게 맞는", "추천해줘" 같은 맞춤 요청이 오면, 정책 나열 대신 거주지/나이/관심분야를 먼저 물어본다.
 - 상세 링크가 없는 정책은 공식 링크가 없다고 설명하고, 신청 방법/제공 기관/공고명 검색 같은 대안 확인 방법을 안내한다.
 - 답변은 3~6문장 정도로 쓰고, 마지막에 추천 정책명을 1~3개만 짧게 나열한다.
 - 사용자가 비교/조건을 물으면 조건에 맞는 이유를 간단히 말한다.
 - 마크다운 굵게 표시는 쓰지 않는다.
 
-최근 대화:
+${userInfo ? userInfo + "\n\n" : ""}최근 대화:
 ${recentHistory || "없음"}
 
 현재 질문:
@@ -190,7 +250,7 @@ ${question}
 ${context}
 `.trim();
 
-  return generateWithFallback(prompt, 700);
+  return generateWithFallback(prompt, 5000);
 }
 
 export async function generateGeneralPolicyReply({

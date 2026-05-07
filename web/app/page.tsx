@@ -87,6 +87,34 @@ async function readApiError(response: Response, fallback: string) {
   return data.error ?? fallback;
 }
 
+// 키워드 검색 결과처럼 클라이언트에서 재정렬할 때 사용
+function sortResultsClientSide(
+  results: SearchResult[],
+  sortBy: "end_date_asc" | "start_date_desc"
+): SearchResult[] {
+  const copy = [...results];
+  if (sortBy === "end_date_asc") {
+    // 마감 임박순: apply_end_dt 오름차순. null/빈값은 뒤로
+    copy.sort((a, b) => {
+      const aEnd = a.apply_end_dt || "9999-12-31";
+      const bEnd = b.apply_end_dt || "9999-12-31";
+      return aEnd.localeCompare(bEnd);
+    });
+  } else {
+    // 새 공고순: apply_start_dt 내림차순. null/빈값은 뒤로
+    copy.sort((a, b) => {
+      const aStart = a.apply_start_dt || "";
+      const bStart = b.apply_start_dt || "";
+      // 빈값은 뒤로
+      if (!aStart && !bStart) return 0;
+      if (!aStart) return 1;
+      if (!bStart) return -1;
+      return bStart.localeCompare(aStart);
+    });
+  }
+  return copy;
+}
+
 export default function Home() {
   const [query, setQuery] = useState("");
   const [filterCategory, setFilterCategory] = useState<string>(ALL);
@@ -119,6 +147,17 @@ export default function Home() {
   const [chatOpen, setChatOpen] = useState(false);
 
   const [showClosed, setShowClosed] = useState(false);
+
+  // 첫 화면 모집중 공고 모드 (검색어/필터 없이 진입했을 때)
+  const PAGE_SIZE = 20;
+  const [sortBy, setSortBy] = useState<"end_date_asc" | "start_date_desc">(
+    "end_date_asc"
+  );
+  const [browseOffset, setBrowseOffset] = useState(0);
+  const [browseHasMore, setBrowseHasMore] = useState(false);
+  const [browseLoading, setBrowseLoading] = useState(false);
+  // 마지막 검색에 사용된 query (정렬 토글 표시 조건 판단용 — ""면 필터-only 검색)
+  const [lastSearchQuery, setLastSearchQuery] = useState("");
 
   const loadScraps = useCallback(async () => {
     const res = await fetch("/api/user/scraps", { cache: "no-store" });
@@ -158,6 +197,85 @@ export default function Home() {
     void loadSession();
   }, [loadSession]);
 
+  // 첫 화면 모집중 공고 로드 (검색어 없이 진입 시)
+  const loadOpenAnnouncements = useCallback(
+    async (
+      offset: number,
+      sort: "end_date_asc" | "start_date_desc",
+      append: boolean
+    ) => {
+      setBrowseLoading(true);
+      setError(null);
+      try {
+        const res = await fetch("/api/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: "",
+            only_open: true,
+            sort_by: sort,
+            offset,
+            limit: PAGE_SIZE,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error ?? "공고를 불러오지 못했어요.");
+        }
+        const newResults = (data.results ?? []) as SearchResult[];
+        if (append) {
+          setResults((prev) => [...prev, ...newResults]);
+        } else {
+          setResults(newResults);
+        }
+        setBrowseHasMore(Boolean(data.hasMore));
+        setBrowseOffset(offset + newResults.length);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "공고를 불러오지 못했어요.");
+        if (!append) setResults([]);
+      } finally {
+        setBrowseLoading(false);
+      }
+    },
+    []
+  );
+
+  // 첫 진입 시 자동 호출
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadOpenAnnouncements(0, sortBy, false);
+    // 첫 진입 시 1회만 실행
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function handleSortChange(next: "end_date_asc" | "start_date_desc") {
+    if (next === sortBy) return;
+    setSortBy(next);
+    if (searched) {
+      if (lastSearchQuery === "") {
+        // 필터-only 검색 모드: handleSearch 다시 호출 (서버 정렬)
+        void handleSearch({ sortOverride: next });
+      } else {
+        // 키워드 검색 모드: 클라이언트에서 재정렬 (similarity 결과 10개를 정렬)
+        setResults((prev) => sortResultsClientSide(prev, next));
+      }
+    } else {
+      // 첫 화면 모드
+      void loadOpenAnnouncements(0, next, false);
+    }
+  }
+
+  function handleLoadMore() {
+    if (browseLoading || loading || !browseHasMore) return;
+    if (searched) {
+      // 검색 모드 더보기
+      void handleSearch({ appendOffset: browseOffset });
+    } else {
+      // 첫 화면 모드 더보기
+      void loadOpenAnnouncements(browseOffset, sortBy, true);
+    }
+  }
+
   async function handleAuthSubmit() {
     setAuthLoading(true);
     setAuthMessage(null);
@@ -179,6 +297,10 @@ export default function Home() {
       setCurrentUser(data.user);
       setPassword("");
       setAuthMessage(authMode === "login" ? "로그인했습니다." : "회원가입했습니다.");
+      // 로그인/회원가입 시 챗봇 초기화 (이전 비로그인 컨텍스트 답변 비우기)
+      setChatMessages([]);
+      setChatInput("");
+      setChatError(null);
       await loadSession();
     } catch (e) {
       setAuthMessage(e instanceof Error ? e.message : "인증 오류가 발생했어요.");
@@ -195,6 +317,10 @@ export default function Home() {
     setScrappedItems([]);
     setShowScrappedOnly(false);
     setAuthMessage("로그아웃했습니다.");
+    // 챗봇 상태 초기화 (로그인 사용자 컨텍스트로 받았던 답변 비우기)
+    setChatMessages([]);
+    setChatInput("");
+    setChatError(null);
   }
 
   async function toggleScrap(annId: number) {
@@ -314,7 +440,10 @@ export default function Home() {
     setAuthMessage("저장된 필터를 적용했습니다.");
   }
 
-  async function handleSearch() {
+  async function handleSearch(options?: {
+    sortOverride?: "end_date_asc" | "start_date_desc";
+    appendOffset?: number; // 더보기용. 지정 시 append 모드
+  }) {
     const trimmed = query.trim();
     const targetAge = parseTargetAge(filterAge);
     const hasFilter =
@@ -322,6 +451,10 @@ export default function Home() {
       filterRegion !== ALL ||
       Boolean(filterAge.trim()) ||
       filterStatus !== ALL;
+
+    const isAppend = options?.appendOffset !== undefined;
+    const effectiveSortBy = options?.sortOverride ?? sortBy;
+    const effectiveOffset = options?.appendOffset ?? 0;
 
     if (!trimmed && !hasFilter) {
       setError("검색어를 입력하거나 필터를 하나 이상 선택해주세요.");
@@ -335,6 +468,10 @@ export default function Home() {
     setLoading(true);
     setError(null);
     setSearched(true);
+    // 검색/필터 시 스크랩만 보기 자동 해제 (append 시는 유지)
+    if (!isAppend) {
+      setShowScrappedOnly(false);
+    }
     try {
       const res = await fetch("/api/search", {
         method: "POST",
@@ -344,16 +481,37 @@ export default function Home() {
           filter_category: filterCategory,
           filter_region: filterRegion,
           user_age: targetAge,
+          // 검색어 없을 때만 정렬/페이지네이션 적용 (키워드 검색은 similarity 정렬 + 10개 고정)
+          ...(trimmed === "" && {
+            sort_by: effectiveSortBy,
+            offset: effectiveOffset,
+            limit: PAGE_SIZE,
+          }),
         }),
       });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error ?? "검색 중 오류가 발생했어요.");
       }
-      setResults((data.results ?? []) as SearchResult[]);
+      const newResults = (data.results ?? []) as SearchResult[];
+      if (isAppend) {
+        setResults((prev) => [...prev, ...newResults]);
+      } else {
+        setResults(newResults);
+        setLastSearchQuery(trimmed);
+      }
+      // 검색어 없을 때만 페이지네이션 상태 업데이트
+      if (trimmed === "") {
+        setBrowseHasMore(Boolean(data.hasMore));
+        setBrowseOffset(effectiveOffset + newResults.length);
+        if (options?.sortOverride) setSortBy(options.sortOverride);
+      } else {
+        setBrowseHasMore(false);
+        setBrowseOffset(0);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "알 수 없는 오류");
-      setResults([]);
+      if (!isAppend) setResults([]);
     } finally {
       setLoading(false);
     }
@@ -366,6 +524,10 @@ export default function Home() {
     setFilterAge("");
     setFilterStatus(ALL);
     setError(null);
+    setLastSearchQuery("");
+    // 검색 모드 종료 → 첫 화면(모집중 공고)으로 복귀
+    setSearched(false);
+    void loadOpenAnnouncements(0, sortBy, false);
   }
 
   async function handleChatSend() {
@@ -508,7 +670,7 @@ export default function Home() {
               className="min-w-0 flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
             />
             <button
-              onClick={handleSearch}
+              onClick={() => handleSearch()}
               disabled={loading || !canSearch}
               className="rounded-lg bg-blue-600 px-6 py-3 text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -592,6 +754,46 @@ export default function Home() {
           </div>
         )}
 
+        {/* 정렬 토글 — 스크랩만 보기/에러 외에 항상 표시 (키워드 검색은 클라이언트 재정렬) */}
+        {!showScrappedOnly && !error && results.length > 0 && (
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="text-sm text-zinc-500">
+              {!searched ? (
+                <>
+                  모집중 공고 {results.length}건
+                  {browseHasMore && (
+                    <span className="text-zinc-400"> (더 보기 가능)</span>
+                  )}
+                </>
+              ) : null}
+            </div>
+            <div className="flex items-center gap-1 rounded-lg border border-zinc-200 bg-white p-0.5 text-sm dark:border-zinc-700 dark:bg-zinc-900">
+              <button
+                type="button"
+                onClick={() => handleSortChange("end_date_asc")}
+                className={`rounded-md px-3 py-1 transition-colors ${
+                  sortBy === "end_date_asc"
+                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                }`}
+              >
+                마감 임박순
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSortChange("start_date_desc")}
+                className={`rounded-md px-3 py-1 transition-colors ${
+                  sortBy === "start_date_desc"
+                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                }`}
+              >
+                새 공고순
+              </button>
+            </div>
+          </div>
+        )}
+
         {searched && !loading && !scrapsLoading && visibleResults.length === 0 && !error && (
           <div className="py-16 text-center text-zinc-500">
             {showScrappedOnly && currentUser
@@ -603,6 +805,19 @@ export default function Home() {
         {scrapsLoading && scrappedIds.size > 0 && showScrappedOnly && currentUser && (
           <div className="py-16 text-center text-zinc-500">
             스크랩한 공고를 불러오는 중...
+          </div>
+        )}
+
+        {/* 첫 화면 모드 로딩/빈 상태 */}
+        {!searched && browseLoading && results.length === 0 && (
+          <div className="py-16 text-center text-zinc-500">
+            모집중인 공고를 불러오는 중...
+          </div>
+        )}
+
+        {!searched && !browseLoading && results.length === 0 && !error && (
+          <div className="py-16 text-center text-zinc-500">
+            현재 모집중인 공고가 없어요.
           </div>
         )}
 
@@ -618,6 +833,20 @@ export default function Home() {
           ))}
         </ul>
 
+        {/* 더 보기 버튼 — 첫 화면 모드 + 필터-only 검색 모드에서 표시 */}
+        {browseHasMore && !showScrappedOnly && !error && (
+          <div className="mt-6 flex justify-center">
+            <button
+              type="button"
+              onClick={handleLoadMore}
+              disabled={browseLoading || loading}
+              className="rounded-md border border-zinc-300 bg-white px-6 py-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+            >
+              {(browseLoading || loading) ? "불러오는 중..." : "더 보기"}
+            </button>
+          </div>
+        )}
+
       </main>
 
       {chatOpen && (
@@ -631,6 +860,7 @@ export default function Home() {
             onSend={handleChatSend}
             onClose={() => setChatOpen(false)}
             currentUser={currentUser}
+            savedFilter={savedFilter}
             scrappedIds={scrappedIds}
             onToggleScrap={toggleScrap}
           />
@@ -670,6 +900,7 @@ function ChatPanel({
   onSend,
   onClose,
   currentUser,
+  savedFilter,
   scrappedIds,
   onToggleScrap,
 }: {
@@ -681,9 +912,22 @@ function ChatPanel({
   onSend: () => void;
   onClose: () => void;
   currentUser: User | null;
+  savedFilter: SavedFilter | null;
   scrappedIds: Set<number>;
   onToggleScrap: (annId: number) => void;
 }) {
+  // 빈 대화 상태 안내 분기용 — 저장된 필터 요약
+  const savedFilterParts: string[] = [];
+  if (savedFilter?.regions?.[0] && savedFilter.regions[0] !== "전국") {
+    savedFilterParts.push(`지역 ${savedFilter.regions[0]}`);
+  }
+  if (savedFilter?.categories?.[0]) {
+    savedFilterParts.push(`카테고리 ${savedFilter.categories[0]}`);
+  }
+  if (typeof savedFilter?.target_age === "number") {
+    savedFilterParts.push(`나이 ${savedFilter.target_age}세`);
+  }
+  const hasSavedFilter = savedFilterParts.length > 0;
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between gap-3 border-b border-zinc-200 px-4 py-3 dark:border-zinc-700">
@@ -714,10 +958,41 @@ function ChatPanel({
 
       <div className="flex-1 overflow-y-auto p-4">
         {messages.length === 0 && !loading && (
-          <p className="text-sm text-zinc-500">
-            예: &quot;청년 창업 지원&quot; / &quot;서울 25살 주거 정책&quot; /
-            &quot;예비창업자 자금 지원&quot;
-          </p>
+          <div className="space-y-3">
+            {currentUser && hasSavedFilter ? (
+              <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200">
+                <p className="font-medium">
+                  저장된 필터로 맞춤 추천 가능 ✨
+                </p>
+                <p className="mt-1 text-xs text-blue-800 dark:text-blue-300">
+                  {savedFilterParts.join(" · ")}
+                </p>
+                <p className="mt-2 text-xs">
+                  &quot;나에게 맞는 정책 추천해줘&quot;라고 물어보면 위 정보로 답변해드려요!
+                </p>
+              </div>
+            ) : currentUser ? (
+              <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+                <p className="font-medium">어떤 정책이 궁금하세요?</p>
+                <p className="mt-1 text-xs">
+                  거주지·나이·관심분야를 알려주시면 더 정확히 추천해드릴게요.
+                  홈 화면에서 필터를 저장하면 챗봇에 자동 적용돼요!
+                </p>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+                <p className="font-medium">어떤 정책이 궁금하세요?</p>
+                <p className="mt-1 text-xs">
+                  거주지·나이·관심분야를 알려주시면 더 정확히 추천해드릴게요.
+                  예: &quot;25살 서울에서 창업하려고 해요&quot;
+                </p>
+              </div>
+            )}
+            <p className="px-1 text-xs text-zinc-500">
+              💡 다른 예: &quot;청년 창업 지원&quot;, &quot;충남 청년 주거&quot;,
+              &quot;예비창업자 자금&quot;
+            </p>
+          </div>
         )}
 
         <ul className="space-y-4">
