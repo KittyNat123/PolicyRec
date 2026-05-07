@@ -43,6 +43,9 @@ CREATE TABLE announcements (
   target_tags TEXT[],
   detail_url TEXT,
   support_type TEXT,
+  required_documents TEXT NULL,      -- 제출 서류
+  application_method TEXT NULL,       -- 신청 방법
+  additional_conditions TEXT NULL,    -- 추가 유의사항 (기타 조건)
   _scope TEXT,
   _scope_reason TEXT,
   content TEXT,                           -- 임베딩용 통합 텍스트

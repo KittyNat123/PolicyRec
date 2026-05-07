@@ -23,6 +23,9 @@ RETURNS TABLE (
   target_tags text[],
   support_type text,
   detail_url text,
+  required_documents text,
+  application_method text,
+  additional_conditions text,
   similarity float
 )
 LANGUAGE plpgsql
@@ -46,6 +49,9 @@ BEGIN
     a.target_tags,
     a.support_type,
     a.detail_url,
+    a.required_documents,
+    a.application_method,
+    a.additional_conditions,
     1 - (a.embedding <=> query_embedding) AS similarity
   FROM announcements a
   WHERE
