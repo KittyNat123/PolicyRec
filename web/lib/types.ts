@@ -23,6 +23,7 @@ export type SearchResult = {
 
 export type User = {
   login_id: string;
+  role?: string;
 };
 
 export type SavedFilter = {
@@ -32,6 +33,13 @@ export type SavedFilter = {
   categories: string[] | null;
   target_age: number | null;
   created_dt?: string;
+};
+
+export type SavedChat = {
+  id: number;
+  content: string;
+  ann_ids: number[];
+  created_dt: string;
 };
 
 export type ChatMessage = {
