@@ -1,15 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  extractSelfQueryFilters,
   generatePolicyAnswer,
   getQueryEmbedding,
+  hasSelfQueryFilterSignal,
 } from "@/lib/gemini";
 import type {
   RagHistoryMessage,
   RagPolicyContext,
   RagUserContext,
+  SelfQueryFilters,
 } from "@/lib/gemini";
 import { getLoginIdFromRequest } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+import { recruitmentStatus } from "@/lib/utils";
 
 // 로그인 사용자의 저장된 필터를 챗봇 컨텍스트로 변환
 async function loadUserContext(
@@ -44,7 +48,7 @@ async function loadUserContext(
 
 export const dynamic = "force-dynamic";
 
-const MATCH_COUNT = 8;
+const MATCH_COUNT = 20;
 const RESULT_COUNT = 5;
 
 const PRIMARY_BASE_COLUMNS = [
@@ -93,6 +97,12 @@ const LEGACY_RICH_COLUMNS = [
 
 type AnnouncementSchema = "primary_extended" | "primary" | "legacy";
 type SupabaseLikeError = { message?: string };
+type FilterConflict = {
+  field: "category" | "region" | "target_age";
+  profile_value: string | number;
+  ai_value: string | number;
+  used: "self_query";
+};
 type NormalizedResultRow = Record<string, unknown> & {
   summary: string | null;
   s_category: string | null;
@@ -103,6 +113,57 @@ type NormalizedResultRow = Record<string, unknown> & {
   required_documents: string | null;
   additional_conditions: string | null;
 };
+
+function buildProfileFilterConflicts(
+  userContext: RagUserContext | undefined,
+  selfQuery: SelfQueryFilters | null
+): FilterConflict[] {
+  if (!userContext || !selfQuery?.applied) return [];
+  const conflicts: FilterConflict[] = [];
+  if (
+    userContext.category &&
+    selfQuery.category &&
+    userContext.category !== selfQuery.category
+  ) {
+    conflicts.push({
+      field: "category",
+      profile_value: userContext.category,
+      ai_value: selfQuery.category,
+      used: "self_query",
+    });
+  }
+  if (
+    userContext.region &&
+    selfQuery.region &&
+    userContext.region !== selfQuery.region
+  ) {
+    conflicts.push({
+      field: "region",
+      profile_value: userContext.region,
+      ai_value: selfQuery.region,
+      used: "self_query",
+    });
+  }
+  if (
+    userContext.targetAge !== null &&
+    userContext.targetAge !== undefined &&
+    selfQuery.target_age !== null &&
+    userContext.targetAge !== selfQuery.target_age
+  ) {
+    conflicts.push({
+      field: "target_age",
+      profile_value: userContext.targetAge,
+      ai_value: selfQuery.target_age,
+      used: "self_query",
+    });
+  }
+  return conflicts;
+}
+
+function chooseEmbeddingQuery(query: string, selfQuery: SelfQueryFilters | null) {
+  const semanticQuery = selfQuery?.applied ? selfQuery.semantic_query.trim() : "";
+  return semanticQuery.replace(/\s/g, "").length >= 2 ? semanticQuery : query;
+}
 
 function isMissingColumnError(error: SupabaseLikeError | null) {
   if (!error?.message) return false;
@@ -375,14 +436,41 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const queryEmbedding = await getQueryEmbedding(question);
+    const selfQuery = hasSelfQueryFilterSignal(question)
+      ? await extractSelfQueryFilters(question)
+      : null;
+    const filterConflicts = buildProfileFilterConflicts(userContext, selfQuery);
+    const effectiveFilterCategory =
+      selfQuery?.category ?? userContext?.category ?? null;
+    const effectiveFilterRegion =
+      selfQuery?.region ?? userContext?.region ?? null;
+    const effectiveUserAge =
+      selfQuery?.target_age ?? userContext?.targetAge ?? null;
+    const embeddingQuery = chooseEmbeddingQuery(question, selfQuery);
+    const effectiveUserContext: RagUserContext = {
+      loginId: userContext?.loginId ?? null,
+      region: effectiveFilterRegion,
+      category: effectiveFilterCategory,
+      targetAge: effectiveUserAge,
+    };
+    const profileContributionContext: RagUserContext = {
+      loginId: userContext?.loginId ?? null,
+      region: selfQuery?.region ? null : userContext?.region ?? null,
+      category: selfQuery?.category ? null : userContext?.category ?? null,
+      targetAge:
+        selfQuery?.target_age !== null && selfQuery?.target_age !== undefined
+          ? null
+          : (userContext?.targetAge ?? null),
+    };
+
+    const queryEmbedding = await getQueryEmbedding(embeddingQuery);
     const hybridResult = await supabase.rpc("match_announcements_hybrid", {
       query_embedding: queryEmbedding,
       match_threshold: 0.2,
       match_count: MATCH_COUNT,
-      filter_category: null,
-      filter_region: null,
-      user_age: null,
+      filter_category: effectiveFilterCategory,
+      filter_region: effectiveFilterRegion,
+      user_age: effectiveUserAge,
     });
 
     if (hybridResult.error) {
@@ -415,6 +503,10 @@ export async function POST(request: NextRequest) {
         similarity: similarityById.get(row.id as number) ?? 0,
       }))
       .sort((a, b) => b.similarity - a.similarity)
+      .filter(
+        (row) =>
+          recruitmentStatus(row.apply_start_dt, row.apply_end_dt) !== "마감"
+      )
       .slice(0, RESULT_COUNT);
 
     const policies = results.map((row): RagPolicyContext => {
@@ -445,7 +537,7 @@ export async function POST(request: NextRequest) {
         question,
         policies,
         history,
-        userContext,
+        userContext: effectiveUserContext,
       });
     } catch (error) {
       console.warn("[/api/chat/rag] Gemini 답변 생성 실패:", error);
@@ -453,11 +545,17 @@ export async function POST(request: NextRequest) {
     }
 
     // 로그인 + 저장 필터 있고 첫 메시지일 때만, 답변 앞에 안내 prefix 추가
-    if (history.length === 0 && hasUserProfile(userContext) && userContext) {
-      reply = buildSavedFilterPrefix(userContext) + reply;
+    if (history.length === 0 && hasUserProfile(profileContributionContext)) {
+      reply = buildSavedFilterPrefix(profileContributionContext) + reply;
     }
 
-    return NextResponse.json({ reply, results, rpc_used: "hybrid" });
+    return NextResponse.json({
+      reply,
+      results,
+      rpc_used: "hybrid",
+      self_query: selfQuery,
+      filter_conflicts: filterConflicts,
+    });
   } catch (error) {
     console.error("[/api/chat/rag] error:", error);
     const message = error instanceof Error ? error.message : "알 수 없는 오류";

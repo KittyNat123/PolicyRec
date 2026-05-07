@@ -16,7 +16,12 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { getQueryEmbedding } from "@/lib/gemini";
+import {
+  extractSelfQueryFilters,
+  getQueryEmbedding,
+  hasSelfQueryFilterSignal,
+} from "@/lib/gemini";
+import type { SelfQueryFilters } from "@/lib/gemini";
 
 export const dynamic = "force-dynamic";
 
@@ -76,6 +81,12 @@ const NATIONWIDE_REGION = "전국";
 
 type AnnouncementSchema = "primary_extended" | "primary" | "legacy";
 type SupabaseLikeError = { message?: string };
+type FilterConflict = {
+  field: "category" | "region" | "target_age";
+  ui_value: string | number;
+  ai_value: string | number;
+  used: "ui";
+};
 type NormalizedResultRow = Record<string, unknown> & {
   summary: string | null;
   s_category: string | null;
@@ -86,6 +97,59 @@ type NormalizedResultRow = Record<string, unknown> & {
   required_documents: string | null;
   additional_conditions: string | null;
 };
+
+function buildFilterConflicts({
+  uiCategory,
+  uiRegion,
+  uiAge,
+  selfQuery,
+}: {
+  uiCategory: string | null;
+  uiRegion: string | null;
+  uiAge: number | null;
+  selfQuery: SelfQueryFilters | null;
+}): FilterConflict[] {
+  if (!selfQuery?.applied) return [];
+  const conflicts: FilterConflict[] = [];
+  if (
+    uiCategory &&
+    selfQuery.category &&
+    uiCategory !== selfQuery.category
+  ) {
+    conflicts.push({
+      field: "category",
+      ui_value: uiCategory,
+      ai_value: selfQuery.category,
+      used: "ui",
+    });
+  }
+  if (uiRegion && selfQuery.region && uiRegion !== selfQuery.region) {
+    conflicts.push({
+      field: "region",
+      ui_value: uiRegion,
+      ai_value: selfQuery.region,
+      used: "ui",
+    });
+  }
+  if (
+    uiAge !== null &&
+    selfQuery.target_age !== null &&
+    uiAge !== selfQuery.target_age
+  ) {
+    conflicts.push({
+      field: "target_age",
+      ui_value: uiAge,
+      ai_value: selfQuery.target_age,
+      used: "ui",
+    });
+  }
+  return conflicts;
+}
+
+function chooseEmbeddingQuery(query: string, selfQuery: SelfQueryFilters | null) {
+  const semanticQuery = selfQuery?.applied ? selfQuery.semantic_query.trim() : "";
+  return semanticQuery.replace(/\s/g, "").length >= 2 ? semanticQuery : query;
+}
 
 function isMissingColumnError(error: SupabaseLikeError | null) {
   if (!error?.message) return false;
@@ -367,20 +431,39 @@ export async function POST(request: NextRequest) {
         results: filterOnlyResult.results,
         hasMore: filterOnlyResult.hasMore,
         rpc_used: "table_filter",
+        self_query: null,
+        filter_conflicts: [],
       });
     }
 
+    const shouldExtractSelfQuery =
+      (!filterCategory || !filterRegion || userAge === null) &&
+      hasSelfQueryFilterSignal(query);
+    const selfQuery = shouldExtractSelfQuery
+      ? await extractSelfQueryFilters(query)
+      : null;
+    const filterConflicts = buildFilterConflicts({
+      uiCategory: filterCategory,
+      uiRegion: filterRegion,
+      uiAge: userAge,
+      selfQuery,
+    });
+    const effectiveFilterCategory = filterCategory ?? selfQuery?.category ?? null;
+    const effectiveFilterRegion = filterRegion ?? selfQuery?.region ?? null;
+    const effectiveUserAge = userAge ?? selfQuery?.target_age ?? null;
+    const embeddingQuery = chooseEmbeddingQuery(query, selfQuery);
+
     // ----- 2. 검색어 → 임베딩 -----
-    const queryEmbedding = await getQueryEmbedding(query);
+    const queryEmbedding = await getQueryEmbedding(embeddingQuery);
 
     // ----- 3-1. 1차: hybrid RPC 시도 (필터 + 풍부한 컬럼) -----
     const hybridResult = await supabase.rpc("match_announcements_hybrid", {
       query_embedding: queryEmbedding,
       match_threshold: 0.2,
       match_count: 10,
-      filter_category: filterCategory,
-      filter_region: filterRegion,
-      user_age: userAge,
+      filter_category: effectiveFilterCategory,
+      filter_region: effectiveFilterRegion,
+      user_age: effectiveUserAge,
     });
 
     if (!hybridResult.error) {
@@ -412,6 +495,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         results,
         rpc_used: richError ? "hybrid" : "hybrid_with_table",
+        self_query: selfQuery,
+        filter_conflicts: filterConflicts,
       });
     }
 
@@ -423,7 +508,8 @@ export async function POST(request: NextRequest) {
 
     // ----- 3-2. 2차: 구 match_announcements + table SELECT 보강 -----
     const hasFallbackFilters =
-      Boolean(filterCategory || filterRegion) || userAge !== null;
+      Boolean(effectiveFilterCategory || effectiveFilterRegion) ||
+      effectiveUserAge !== null;
     const basicResult = await supabase.rpc("match_announcements", {
       query_embedding: queryEmbedding,
       match_threshold: 0.2,
@@ -457,7 +543,12 @@ export async function POST(request: NextRequest) {
     }>;
 
     if (basicRows.length === 0) {
-      return NextResponse.json({ results: [], rpc_used: "basic" });
+      return NextResponse.json({
+        results: [],
+        rpc_used: "basic",
+        self_query: selfQuery,
+        filter_conflicts: filterConflicts,
+      });
     }
 
     // 구 RPC는 반환 컬럼이 적으므로 announcements 테이블에서 풍부한 컬럼 보강
@@ -472,13 +563,15 @@ export async function POST(request: NextRequest) {
       );
       const fallbackRows = applyResultFilters(
         basicRows.map(normalizeResultRow),
-        filterCategory,
-        filterRegion,
-        userAge
+        effectiveFilterCategory,
+        effectiveFilterRegion,
+        effectiveUserAge
       ).slice(0, DEFAULT_MATCH_COUNT);
       return NextResponse.json({
         results: fallbackRows,
         rpc_used: "basic_only",
+        self_query: selfQuery,
+        filter_conflicts: filterConflicts,
       });
     }
 
@@ -501,14 +594,16 @@ export async function POST(request: NextRequest) {
     // 클라이언트 사이드 필터 적용 (구 RPC는 필터 인자 안 받으므로 여기서 처리)
     const filtered = applyResultFilters(
       merged.map(normalizeResultRow),
-      filterCategory,
-      filterRegion,
-      userAge
+      effectiveFilterCategory,
+      effectiveFilterRegion,
+      effectiveUserAge
     ).slice(0, DEFAULT_MATCH_COUNT);
 
     return NextResponse.json({
       results: filtered,
       rpc_used: "basic_with_table",
+      self_query: selfQuery,
+      filter_conflicts: filterConflicts,
     });
   } catch (e) {
     console.error("[/api/search] error:", e);
