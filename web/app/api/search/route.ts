@@ -21,6 +21,12 @@ import {
   getQueryEmbedding,
   hasSelfQueryFilterSignal,
 } from "@/lib/gemini";
+import {
+  cleanDetailUrl,
+  cleanPolicyText,
+  cleanTargetGroup,
+  normalizeApplicationDetails,
+} from "@/lib/policy-normalization";
 import type { SelfQueryFilters } from "@/lib/gemini";
 
 export const dynamic = "force-dynamic";
@@ -93,9 +99,11 @@ type NormalizedResultRow = Record<string, unknown> & {
   apply_start_dt: string | null;
   apply_end_dt: string | null;
   target_tags: string[];
+  target_group: string | null;
   application_method: string | null;
   required_documents: string | null;
   additional_conditions: string | null;
+  detail_url: string | null;
 };
 
 function buildFilterConflicts({
@@ -181,7 +189,7 @@ function normalizeTargetTags(value: unknown): string[] {
 }
 
 function toNullableString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() !== "" ? value : null;
+  return cleanPolicyText(value);
 }
 
 function normalizeResultRow(row: Record<string, unknown>): NormalizedResultRow {
@@ -205,10 +213,15 @@ function normalizeResultRow(row: Record<string, unknown>): NormalizedResultRow {
         : null;
   const summary =
     typeof row.summary === "string"
-      ? row.summary
+      ? cleanPolicyText(row.summary)
       : typeof row.content === "string"
-        ? row.content
+        ? cleanPolicyText(row.content)
         : null;
+  const targetTags = normalizeTargetTags(row.target_tags);
+  const applicationDetails = normalizeApplicationDetails(
+    row.application_method,
+    row.required_documents
+  );
 
   return {
     ...row,
@@ -216,10 +229,12 @@ function normalizeResultRow(row: Record<string, unknown>): NormalizedResultRow {
     s_category: category,
     apply_start_dt: applyStart,
     apply_end_dt: applyEnd,
-    target_tags: normalizeTargetTags(row.target_tags),
-    application_method: toNullableString(row.application_method),
-    required_documents: toNullableString(row.required_documents),
+    target_group: cleanTargetGroup(row.target_group, targetTags),
+    target_tags: targetTags,
+    application_method: applicationDetails.application_method,
+    required_documents: applicationDetails.required_documents,
     additional_conditions: toNullableString(row.additional_conditions),
+    detail_url: cleanDetailUrl(row.detail_url),
   };
 }
 
@@ -230,6 +245,19 @@ function toNullableNumber(value: unknown): number | null {
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
+}
+
+function compareBySimilarityDescThenIdAsc(
+  a: Record<string, unknown>,
+  b: Record<string, unknown>
+) {
+  const similarityA = toNullableNumber(a.similarity) ?? 0;
+  const similarityB = toNullableNumber(b.similarity) ?? 0;
+  if (similarityA !== similarityB) return similarityB - similarityA;
+
+  const idA = toNullableNumber(a.id) ?? Number.MAX_SAFE_INTEGER;
+  const idB = toNullableNumber(b.id) ?? Number.MAX_SAFE_INTEGER;
+  return idA - idB;
 }
 
 function applyResultFilters(
@@ -392,15 +420,15 @@ export async function POST(request: NextRequest) {
     // ----- 1. 요청 파싱 -----
     const body = await request.json().catch(() => ({}));
     const query = typeof body.query === "string" ? body.query.trim() : "";
+    const rawFilterCategory =
+      typeof body.filter_category === "string" ? body.filter_category.trim() : "";
+    const rawFilterRegion =
+      typeof body.filter_region === "string" ? body.filter_region.trim() : "";
     const filterCategory =
-      typeof body.filter_category === "string" && body.filter_category !== "전체"
-        ? body.filter_category
-        : null;
+      rawFilterCategory && rawFilterCategory !== "전체" ? rawFilterCategory : null;
     const filterRegion =
-      typeof body.filter_region === "string" && body.filter_region !== "전체"
-        ? body.filter_region
-        : null;
-    const userAge = typeof body.user_age === "number" ? body.user_age : null;
+      rawFilterRegion && rawFilterRegion !== "전체" ? rawFilterRegion : null;
+    const userAge = toNullableNumber(body.user_age);
 
     // 첫 화면 모집중 공고용 추가 파라미터 (검색어 없을 때만 의미 있음)
     const sortBy: "end_date_asc" | "start_date_desc" =
@@ -454,7 +482,9 @@ export async function POST(request: NextRequest) {
       uiAge: userAge,
       selfQuery,
     });
-    const effectiveFilterCategory = filterCategory ?? selfQuery?.category ?? null;
+    // 카테고리는 taxonomy가 애매한 질문에서 false negative를 만들기 쉬워서
+    // 사용자가 UI로 고른 값만 하드 필터로 적용합니다.
+    const effectiveFilterCategory = filterCategory;
     const effectiveFilterRegion = filterRegion ?? selfQuery?.region ?? null;
     const effectiveUserAge = userAge ?? selfQuery?.target_age ?? null;
     const uiFiltersComplete = Boolean(filterCategory && filterRegion);
@@ -466,7 +496,7 @@ export async function POST(request: NextRequest) {
     // ----- 3-1. 1차: hybrid RPC 시도 (필터 + 풍부한 컬럼) -----
     const hybridResult = await supabase.rpc("match_announcements_hybrid", {
       query_embedding: queryEmbedding,
-      match_threshold: 0.2,
+      match_threshold: 0.65,
       match_count: 10,
       filter_category: effectiveFilterCategory,
       filter_region: effectiveFilterRegion,
@@ -494,10 +524,7 @@ export async function POST(request: NextRequest) {
               ...row,
               similarity: similarityById.get(row.id as number) ?? 0,
             }))
-            .sort(
-              (a, b) =>
-                (b.similarity as number) - (a.similarity as number)
-            )
+            .sort(compareBySimilarityDescThenIdAsc)
             .map(normalizeResultRow);
       return NextResponse.json({
         results,
@@ -519,7 +546,7 @@ export async function POST(request: NextRequest) {
       effectiveUserAge !== null;
     const basicResult = await supabase.rpc("match_announcements", {
       query_embedding: queryEmbedding,
-      match_threshold: 0.2,
+      match_threshold: 0.65,
       match_count: hasFallbackFilters
         ? FILTERED_FALLBACK_MATCH_COUNT
         : DEFAULT_MATCH_COUNT,
@@ -596,7 +623,7 @@ export async function POST(request: NextRequest) {
         ...row,
         similarity: similarityById.get(row.id as number) ?? 0,
       }))
-      .sort((a, b) => b.similarity - a.similarity);
+      .sort(compareBySimilarityDescThenIdAsc);
 
     // 클라이언트 사이드 필터 적용 (구 RPC는 필터 인자 안 받으므로 여기서 처리)
     const filtered = applyResultFilters(
