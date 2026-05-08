@@ -16,6 +16,7 @@ CREATE TABLE user_info (
   login_id VARCHAR PRIMARY KEY REFERENCES users(login_id) ON DELETE CASCADE,
   nickname VARCHAR,
   user_type VARCHAR,                      -- 사용자 유형 (청년, 예비 창업자 등)
+  created_dt TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_dt TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
