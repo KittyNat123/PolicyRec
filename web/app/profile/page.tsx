@@ -34,7 +34,7 @@ export default function ProfilePage() {
     setLoading(true);
     setError(null);
     try {
-      const meRes = await fetch("/api/auth/me", { cache: "no-store" });
+      const meRes = await fetch("/api/mypage/info", { cache: "no-store" });
       const meData = await meRes.json().catch(() => ({}));
       const user = (meData.user ?? null) as User | null;
       setCurrentUser(user);
@@ -85,7 +85,7 @@ export default function ProfilePage() {
   async function toggleScrap(annId: number) {
     if (!currentUser) return;
 
-    const res = await fetch("/api/user/scraps", {
+    const res = await fetch("/api/mypage/scraps", {
       method: scrappedIds.has(annId) ? "DELETE" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ann_id: annId }),

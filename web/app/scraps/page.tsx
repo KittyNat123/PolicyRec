@@ -83,7 +83,7 @@ export default function ScrapsPage() {
   async function toggleScrap(annId: number) {
     if (!currentUser) return;
 
-    const res = await fetch("/api/user/scraps", {
+    const res = await fetch("/api/mypage/scraps", {
       method: scrappedIds.has(annId) ? "DELETE" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ann_id: annId }),

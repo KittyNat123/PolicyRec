@@ -204,6 +204,7 @@ export default function Home() {
   const [signupRegion, setSignupRegion] = useState<string>(ALL);
   const [signupCategory, setSignupCategory] = useState<string>(ALL);
   const [signupAge, setSignupAge] = useState("");
+  const [signupUserType, setSignupUserType] = useState("선택 안함");
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [savedFilter, setSavedFilter] = useState<SavedFilter | null>(null);
   const [scrappedIds, setScrappedIds] = useState<Set<number>>(new Set());
@@ -241,7 +242,7 @@ export default function Home() {
   const [lastSearchQuery, setLastSearchQuery] = useState("");
 
   const loadScraps = useCallback(async () => {
-    const res = await fetch("/api/user/scraps", { cache: "no-store" });
+    const res = await fetch("/api/mypage/scraps", { cache: "no-store" });
     if (!res.ok) {
       setScrappedIds(new Set());
       return;
@@ -408,7 +409,7 @@ export default function Home() {
           setAuthLoading(false);
           return;
         }
-        payload = { ...payload, region: signupRegion, category: signupCategory, target_age: targetAge };
+        payload = { ...payload, region: signupRegion, category: signupCategory, target_age: targetAge, user_type: signupUserType };
       }
       const res = await fetch(`/api/auth/${authMode}`, {
         method: "POST",
@@ -430,6 +431,8 @@ export default function Home() {
         setSignupRegion(ALL);
         setSignupCategory(ALL);
         setSignupAge("");
+        setSignupUserType("선택 안함");
+        setAuthMode("login");
       }
       setAuthMessage(authMode === "login" ? "로그인했습니다." : "회원가입했습니다.");
       // 로그인/회원가입 시 챗봇 초기화 (이전 비로그인 컨텍스트 답변 비우기)
@@ -479,7 +482,7 @@ export default function Home() {
     }
 
     const isScrapped = scrappedIds.has(annId);
-    const res = await fetch("/api/user/scraps", {
+    const res = await fetch("/api/mypage/scraps", {
       method: isScrapped ? "DELETE" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ann_id: annId }),
@@ -969,6 +972,8 @@ export default function Home() {
             setSignupCategory={setSignupCategory}
             signupAge={signupAge}
             setSignupAge={setSignupAge}
+            signupUserType={signupUserType}
+            setSignupUserType={setSignupUserType}
             currentUser={currentUser}
             authLoading={authLoading}
             authMessage={authMessage}
@@ -1609,6 +1614,8 @@ function AuthPanel({
   setSignupCategory,
   signupAge,
   setSignupAge,
+  signupUserType,
+  setSignupUserType,
   currentUser,
   authLoading,
   authMessage,
@@ -1633,6 +1640,8 @@ function AuthPanel({
   setSignupCategory: (value: string) => void;
   signupAge: string;
   setSignupAge: (value: string) => void;
+  signupUserType: string;
+  setSignupUserType: (value: string) => void;
   currentUser: User | null;
   authLoading: boolean;
   authMessage: string | null;
@@ -1652,12 +1661,18 @@ function AuthPanel({
         <div className="mb-2 flex items-center justify-between gap-2">
           <span className="font-medium">{currentUser.login_id}</span>
           <div className="flex items-center gap-1">
+            <a
+              href="/mypage"
+              className="rounded-md border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              마이페이지
+            </a>
             {isAdmin && (
               <a
                 href="/admin"
                 className="rounded-md border border-blue-300 bg-blue-50 px-2 py-1 text-xs text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-950 dark:text-blue-200 dark:hover:bg-blue-900"
               >
-                관리자
+                관리자페이지
               </a>
             )}
             <button
@@ -1751,6 +1766,18 @@ function AuthPanel({
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
               관심정보를 입력하면 맞춤 추천에 바로 활용돼요. (선택)
             </p>
+            <label className="flex items-center justify-between gap-2 text-xs text-zinc-600 dark:text-zinc-300">
+              <span>사용자 유형</span>
+              <select
+                value={signupUserType}
+                onChange={(e) => setSignupUserType(e.target.value)}
+                className="min-w-0 flex-1 rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
+              >
+                {["선택 안함", "청년", "예비 창업자", "창업자", "기업"].map((opt) => (
+                  <option key={opt} value={opt}>{opt}</option>
+                ))}
+              </select>
+            </label>
             <label className="flex items-center justify-between gap-2 text-xs text-zinc-600 dark:text-zinc-300">
               <span>지역</span>
               <select

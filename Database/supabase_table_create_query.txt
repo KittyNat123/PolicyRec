@@ -15,10 +15,7 @@ CREATE TABLE users (
 CREATE TABLE user_info (
   login_id VARCHAR PRIMARY KEY REFERENCES users(login_id) ON DELETE CASCADE,
   nickname VARCHAR,
-  age_group TEXT,
-  regions TEXT[],               -- 관심 지역 배열
-  categories TEXT[],            -- 관심 분야 배열
-  interest_keywords TEXT[],      -- 관심 키워드 배열
+  user_type VARCHAR,                      -- 사용자 유형 (청년, 예비 창업자 등)
   updated_dt TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 

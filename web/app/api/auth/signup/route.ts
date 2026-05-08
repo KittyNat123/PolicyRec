@@ -70,11 +70,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    await supabase.from("user_info").insert({ login_id: loginId });
-
     const region = normalizeFilterValue(body.region);
     const category = normalizeFilterValue(body.category);
     const targetAge = normalizeAge(body.target_age);
+    const userType = typeof body.user_type === "string" ? body.user_type.trim() : "";
+
+    await supabase.from("user_info").insert({
+      login_id: loginId,
+      age_group: targetAge !== null ? String(targetAge) : null,
+      regions: region ? [region] : [],
+      categories: category ? [category] : [],
+      user_type: userType || null,
+    });
+
     if (region || category || targetAge !== null) {
       await supabase.from("user_filters").insert({
         login_id: loginId,
