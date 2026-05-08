@@ -130,6 +130,27 @@ function buildChatTranscript(messages: ChatMessage[]): string {
     .join("\n\n---\n\n");
 }
 
+// buildChatTranscript 의 역방향 — 저장된 텍스트를 ChatMessage[] 로 복원
+// results(PolicyCard 데이터)는 텍스트에 없으므로 content만 복원됩니다.
+function parseChatTranscript(transcript: string): ChatMessage[] {
+  return transcript
+    .split("\n\n---\n\n")
+    .map((block) => {
+      const newlineIdx = block.indexOf("\n");
+      if (newlineIdx === -1) return null;
+      const speaker = block.slice(0, newlineIdx).trim();
+      // "추천 정책 ID: ..." 줄은 content에서 제거
+      const body = block
+        .slice(newlineIdx + 1)
+        .replace(/\n추천 정책 ID:.*$/m, "")
+        .trim();
+      if (!body) return null;
+      const role: ChatMessage["role"] = speaker === "사용자" ? "user" : "assistant";
+      return { role, content: body } satisfies ChatMessage;
+    })
+    .filter((m): m is ChatMessage => m !== null);
+}
+
 // 키워드 검색 결과처럼 클라이언트에서 재정렬할 때 사용
 function sortResultsClientSide(
   results: SearchResult[],
@@ -190,6 +211,7 @@ export default function Home() {
   const [scrapsLoading, setScrapsLoading] = useState(false);
   const [showScrappedOnly, setShowScrappedOnly] = useState(false);
   const [savedChats, setSavedChats] = useState<SavedChat[]>([]);
+  const [activeChatId, setActiveChatId] = useState<number | null>(null);
   const [savedChatsLoading, setSavedChatsLoading] = useState(false);
   const [savedChatsSetupRequired, setSavedChatsSetupRequired] = useState(false);
   const [authMessage, setAuthMessage] = useState<string | null>(null);
@@ -202,7 +224,10 @@ export default function Home() {
   const [chatError, setChatError] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const chatAbortRef = useRef<AbortController | null>(null);
-  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  // 이탈 확인 팝업 — 어떤 액션을 확인 중인지 함께 기억
+  // null = 팝업 닫힘 / "new" = 새 채팅 / "logout" = 로그아웃 / restore = 저장 대화 복원
+  type LeaveAction = "new" | "logout" | { type: "restore"; chat: SavedChat };
+  const [leaveAction, setLeaveAction] = useState<LeaveAction | null>(null);
 
   const [showClosed, setShowClosed] = useState(false);
 
@@ -411,6 +436,7 @@ export default function Home() {
       setChatMessages([]);
       setChatInput("");
       setChatError(null);
+      setActiveChatId(null);
       await loadSession();
     } catch (e) {
       setAuthMessage(e instanceof Error ? e.message : "인증 오류가 발생했어요.");
@@ -420,6 +446,15 @@ export default function Home() {
   }
 
   async function handleLogout() {
+    // 진행 중인 대화가 있으면 이탈 확인 팝업 먼저 표시
+    if (chatMessages.length > 0) {
+      setLeaveAction("logout");
+      return;
+    }
+    await doLogout();
+  }
+
+  async function doLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
     setCurrentUser(null);
     setSavedFilter(null);
@@ -433,6 +468,8 @@ export default function Home() {
     setChatMessages([]);
     setChatInput("");
     setChatError(null);
+    setActiveChatId(null);
+    setLeaveAction(null);
   }
 
   async function toggleScrap(annId: number) {
@@ -468,23 +505,30 @@ export default function Home() {
     setAuthMessage(isScrapped ? "스크랩을 해제했습니다." : "스크랩했습니다.");
   }
 
-  async function saveCurrentChat() {
+  async function saveCurrentChat(silent = false): Promise<boolean> {
     if (!currentUser) {
       setAuthMessage("로그인하면 저장 가능해요.");
-      return;
+      return false;
     }
     if (chatMessages.length === 0) {
-      showToast("저장할 대화가 없습니다.");
-      return;
+      // silent 모드(자동저장)에서는 "저장할 대화 없음" 토스트 생략
+      if (!silent) showToast("저장할 대화가 없습니다.");
+      return false;
     }
 
     const content = buildChatTranscript(chatMessages);
     const annIds = collectChatAnnIds(chatMessages);
+    // 첫 번째 사용자 메시지를 제목으로 사용 (최대 40자 + 말줄임)
+    const firstUserMsg = chatMessages.find((m) => m.role === "user")?.content ?? "";
+    const title = firstUserMsg.length > 40 ? `${firstUserMsg.slice(0, 40)}...` : firstUserMsg;
+    const targetChatId = activeChatId;
 
     const res = await fetch("/api/user/saved-chats", {
-      method: "POST",
+      method: targetChatId ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        id: targetChatId,
+        title,
         content,
         ann_ids: annIds,
       }),
@@ -496,30 +540,71 @@ export default function Home() {
         setSavedChatsSetupRequired(true);
       }
       setAuthMessage(message);
-      showToast(message);
-      return;
+      // silent 모드(자동저장)에서는 실패 토스트도 생략 — 새 채팅 흐름을 방해하지 않기 위해
+      if (!silent) showToast(message);
+      return false;
     }
 
     const data = await res.json().catch(() => ({}));
     if (data.saved_chat) {
-      setSavedChats((prev) => [data.saved_chat as SavedChat, ...prev]);
+      const savedChat = data.saved_chat as SavedChat;
+      setSavedChats((prev) =>
+        targetChatId
+          ? prev.map((chat) => (chat.id === savedChat.id ? savedChat : chat))
+          : [savedChat, ...prev]
+      );
+      setActiveChatId(savedChat.id);
     } else {
       await loadSavedChats();
     }
     setAuthMessage("챗봇 대화를 저장했습니다.");
-    showToast("챗봇 대화를 저장했습니다.");
+    // silent 모드(자동저장)에서는 성공 토스트 생략 — 새 채팅 시작 토스트만 보이게
+    if (!silent) showToast("챗봇 대화를 저장했습니다.");
+    return true;
   }
 
-  // "새 채팅 시작" 버튼 클릭 — 답변 생성 중이면 확인 모달 먼저
+  // "새 채팅 시작" 버튼 클릭 — 대화 내용이 있으면 무조건 확인 팝업 먼저
   function requestNewChat() {
-    if (chatLoading) {
-      setShowLeaveConfirm(true);
+    if (chatMessages.length > 0 || chatLoading) {
+      setLeaveAction("new");
       return;
     }
-    startNewChat();
+    doStartNewChat();
   }
 
-  function startNewChat() {
+  // "이전 대화로 돌아가기" 클릭 — 현재 대화 있으면 확인 팝업, 없으면 바로 복원
+  function requestRestoreChat(chat: SavedChat) {
+    if (chatMessages.length > 0 || chatLoading) {
+      setLeaveAction({ type: "restore", chat });
+      return;
+    }
+    doRestoreChat(chat);
+  }
+
+  // 팝업에서 "그냥 이동 / 이동할게요" 확정 시 — leaveAction에 따라 분기
+  function confirmLeave() {
+    if (leaveAction === "new") {
+      doStartNewChat();
+    } else if (leaveAction === "logout") {
+      void doLogout();
+    } else if (leaveAction && typeof leaveAction === "object" && leaveAction.type === "restore") {
+      doRestoreChat(leaveAction.chat);
+    }
+  }
+
+  // 팝업에서 "저장하고 이동" (로그인 시에만 노출)
+  async function saveAndLeave() {
+    if (chatMessages.length === 0) {
+      confirmLeave();
+      return;
+    }
+    const saved = await saveCurrentChat(false);
+    if (saved) {
+      confirmLeave();
+    }
+  }
+
+  function doStartNewChat() {
     // 진행 중인 답변 요청 취소 — 응답이 새 채팅에 섞이지 않도록
     if (chatAbortRef.current) {
       chatAbortRef.current.abort();
@@ -529,8 +614,35 @@ export default function Home() {
     setChatMessages([]);
     setChatInput("");
     setChatError(null);
-    setShowLeaveConfirm(false);
+    setActiveChatId(null);
+    setLeaveAction(null);
     showToast("새 채팅을 시작했습니다.");
+  }
+
+  // 저장된 대화를 현재 채팅에 복원
+  function doRestoreChat(chat: SavedChat) {
+    if (chatAbortRef.current) {
+      chatAbortRef.current.abort();
+      chatAbortRef.current = null;
+    }
+    setChatLoading(false);
+    // content(텍스트 전문) → ChatMessage 배열로 파싱해서 복원
+    const restored = parseChatTranscript(chat.content);
+    setChatMessages(restored);
+    setChatInput("");
+    setChatError(null);
+    setActiveChatId(chat.id);
+    setLeaveAction(null);
+    showToast(`"${chat.title ?? "저장된 대화"}"를 불러왔습니다.`);
+  }
+
+  function startNewChat() {
+    // ✅ 자동저장: 로그인 상태이고 저장할 대화가 있을 때 백그라운드에서 저장
+    // void로 호출 = fire-and-forget. 저장 성공/실패 여부와 무관하게 새 채팅 즉시 진행
+    if (currentUser && chatMessages.length > 0) {
+      void saveCurrentChat(true); // silent=true: 자동저장이므로 토스트 생략
+    }
+    doStartNewChat();
   }
 
   async function deleteSavedChat(id: number) {
@@ -546,6 +658,9 @@ export default function Home() {
     }
 
     setSavedChats((prev) => prev.filter((chat) => chat.id !== id));
+    if (activeChatId === id) {
+      setActiveChatId(null);
+    }
     setAuthMessage("저장 답변을 삭제했습니다.");
     showToast("저장 답변을 삭제했습니다.");
   }
@@ -797,14 +912,14 @@ export default function Home() {
       ? showClosed
         ? results
         : results.filter(
-            (r) =>
-              recruitmentStatus(r.apply_start_dt, r.apply_end_dt) !== "마감"
-          )
-      : results.filter(
           (r) =>
-            recruitmentStatus(r.apply_start_dt, r.apply_end_dt) ===
-            filterStatus
-        );
+            recruitmentStatus(r.apply_start_dt, r.apply_end_dt) !== "마감"
+        )
+      : results.filter(
+        (r) =>
+          recruitmentStatus(r.apply_start_dt, r.apply_end_dt) ===
+          filterStatus
+      );
 
   // 스크랩만 보기 모드에서는 "마감 제외" 기본 동작을 우회한다.
   // 자기가 스크랩한 정책은 마감 여부 상관없이 보여주는 게 자연스럽기 때문.
@@ -812,22 +927,22 @@ export default function Home() {
   const visibleResults =
     showScrappedOnly && currentUser
       ? (filterStatus === ALL
-          ? scrappedIds.size === 0
-            ? []
-            : scrappedItems
-          : (scrappedIds.size === 0 ? [] : scrappedItems).filter(
-              (r) =>
-                recruitmentStatus(r.apply_start_dt, r.apply_end_dt) ===
-                filterStatus
-            )
+        ? scrappedIds.size === 0
+          ? []
+          : scrappedItems
+        : (scrappedIds.size === 0 ? [] : scrappedItems).filter(
+          (r) =>
+            recruitmentStatus(r.apply_start_dt, r.apply_end_dt) ===
+            filterStatus
         )
+      )
       : statusFilteredResults;
   const canSearch = Boolean(
     query.trim() ||
-      filterCategory !== ALL ||
-      filterRegion !== ALL ||
-      filterAge.trim() ||
-      filterStatus !== ALL
+    filterCategory !== ALL ||
+    filterRegion !== ALL ||
+    filterAge.trim() ||
+    filterStatus !== ALL
   );
 
   return (
@@ -989,11 +1104,10 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={() => handleSortChange("similarity_desc")}
-                  className={`rounded-md px-3 py-1 transition-colors ${
-                    sortBy === "similarity_desc"
-                      ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                      : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                  }`}
+                  className={`rounded-md px-3 py-1 transition-colors ${sortBy === "similarity_desc"
+                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    }`}
                 >
                   유사도순
                 </button>
@@ -1001,22 +1115,20 @@ export default function Home() {
               <button
                 type="button"
                 onClick={() => handleSortChange("end_date_asc")}
-                className={`rounded-md px-3 py-1 transition-colors ${
-                  sortBy === "end_date_asc"
-                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                    : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                }`}
+                className={`rounded-md px-3 py-1 transition-colors ${sortBy === "end_date_asc"
+                  ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                  : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  }`}
               >
                 마감 임박순
               </button>
               <button
                 type="button"
                 onClick={() => handleSortChange("start_date_desc")}
-                className={`rounded-md px-3 py-1 transition-colors ${
-                  sortBy === "start_date_desc"
-                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                    : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                }`}
+                className={`rounded-md px-3 py-1 transition-colors ${sortBy === "start_date_desc"
+                  ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                  : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  }`}
               >
                 새 공고순
               </button>
@@ -1105,48 +1217,63 @@ export default function Home() {
             savedChatsSetupRequired={savedChatsSetupRequired}
             scrappedIds={scrappedIds}
             onToggleScrap={toggleScrap}
-            onSaveChat={saveCurrentChat}
             onDeleteSavedChat={deleteSavedChat}
             onNewChat={requestNewChat}
+            onRestoreChat={requestRestoreChat}
           />
         </div>
       )}
 
-      {showLeaveConfirm && (
+      {leaveAction !== null && (
         <div
           role="dialog"
           aria-modal="true"
           className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 px-4"
-          onClick={() => setShowLeaveConfirm(false)}
+          onClick={() => setLeaveAction(null)}
         >
           <div
             className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl dark:bg-zinc-900"
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
-              새 채팅을 시작할까요?
+              {leaveAction === "logout"
+                ? "로그아웃할까요?"
+                : leaveAction === "new"
+                  ? "새 채팅을 시작할까요?"
+                  : "이 대화로 돌아갈까요?"}
             </h3>
             <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
-              답변을 생성하고 있습니다. 이 채팅방에서 나가시겠습니까?
-              <br />
-              <span className="text-xs text-zinc-500 dark:text-zinc-400">
-                (채팅은 저장되지 않고 즉시 종료됩니다.)
-              </span>
+              이동하면 지금까지 나눈 내용은 삭제됩니다. 이동할까요?
             </p>
-            <div className="mt-4 flex justify-end gap-2">
+            {!currentUser && (
+              <p className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">
+                💡 회원가입 후 로그인하면 대화 내용을 저장할 수 있습니다.
+              </p>
+            )}
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              {/* 로그인 상태일 때만 "저장하고 이동" 노출 */}
+              {currentUser && (
+                <button
+                  type="button"
+                  onClick={() => void saveAndLeave()}
+                  className="rounded-md border border-blue-300 px-3 py-1.5 text-sm text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-300 dark:hover:bg-blue-950"
+                >
+                  저장하고 이동
+                </button>
+              )}
               <button
                 type="button"
-                onClick={() => setShowLeaveConfirm(false)}
-                className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                onClick={confirmLeave}
+                className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
               >
-                머무르기
+                그냥 이동
               </button>
               <button
                 type="button"
-                onClick={startNewChat}
-                className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+                onClick={() => setLeaveAction(null)}
+                className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
               >
-                네, 나갈게요
+                머무르기
               </button>
             </div>
           </div>
@@ -1192,9 +1319,9 @@ function ChatPanel({
   savedChatsSetupRequired,
   scrappedIds,
   onToggleScrap,
-  onSaveChat,
   onDeleteSavedChat,
   onNewChat,
+  onRestoreChat,
 }: {
   messages: ChatMessage[];
   input: string;
@@ -1210,12 +1337,11 @@ function ChatPanel({
   savedChatsSetupRequired: boolean;
   scrappedIds: Set<number>;
   onToggleScrap: (annId: number) => void;
-  onSaveChat: () => void;
   onDeleteSavedChat: (id: number) => void;
   onNewChat: () => void;
+  onRestoreChat: (chat: SavedChat) => void;
 }) {
   const [showSavedChats, setShowSavedChats] = useState(false);
-  const [openSavedChatId, setOpenSavedChatId] = useState<number | null>(null);
   // 빈 대화 상태 안내 분기용 — 저장된 필터 요약
   const savedFilterParts: string[] = [];
   if (savedFilter?.regions?.[0] && savedFilter.regions[0] !== "전국") {
@@ -1267,23 +1393,6 @@ function ChatPanel({
         </button>
         <button
           type="button"
-          onClick={onSaveChat}
-          disabled={!currentUser || messages.length === 0 || loading}
-          title={
-            currentUser
-              ? messages.length === 0
-                ? "저장할 대화가 없습니다."
-                : loading
-                  ? "답변 생성 후 저장할 수 있습니다."
-                : "현재 대화 전체 저장"
-              : "로그인하면 저장 가능"
-          }
-          className="rounded-md border border-blue-200 px-2.5 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-blue-900 dark:text-blue-300 dark:hover:bg-blue-950"
-        >
-          대화 저장
-        </button>
-        <button
-          type="button"
           onClick={() => setShowSavedChats((value) => !value)}
           disabled={!currentUser}
           title={currentUser ? "저장한 대화 보기" : "로그인하면 저장 가능"}
@@ -1298,83 +1407,75 @@ function ChatPanel({
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4">
-        {showSavedChats && (
-          <div className="mb-4 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-900">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">
-                저장한 답변
-              </p>
-              <span className="text-xs text-zinc-500">
-                {savedChats.length}개
-              </span>
-            </div>
+      {/* 저장 목록 패널 — 채팅 영역과 분리된 독립 섹션 */}
+      {showSavedChats && (
+        <div className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900">
+          <div className="flex items-center justify-between gap-2 px-4 py-2">
+            <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">
+              저장한 대화 {savedChats.length}개
+            </p>
+            <button
+              type="button"
+              onClick={() => setShowSavedChats(false)}
+              className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+            >
+              닫기
+            </button>
+          </div>
+          <div className="max-h-56 overflow-y-auto px-3 pb-3">
             {!currentUser ? (
-              <p className="mt-3 text-xs text-zinc-500">
-                로그인하면 답변을 저장하고 다시 볼 수 있어요.
-              </p>
+              <p className="text-xs text-zinc-500">로그인하면 저장 목록을 볼 수 있어요.</p>
             ) : savedChatsSetupRequired ? (
-              <p className="mt-3 text-xs leading-5 text-amber-700 dark:text-amber-300">
-                saved_chats 테이블 적용 전입니다.
-                Database/saved_chats_ddl.sql을 Supabase에 적용하면 저장 목록이 표시돼요.
+              <p className="text-xs leading-5 text-amber-700 dark:text-amber-300">
+                saved_chats 테이블 접근이 필요합니다.
+                Database/ERD_table_info_v1.md 기준 DB 구조를 확인해주세요.
               </p>
             ) : savedChatsLoading ? (
-              <p className="mt-3 text-xs text-zinc-500">불러오는 중...</p>
+              <p className="text-xs text-zinc-500">불러오는 중...</p>
             ) : savedChats.length === 0 ? (
-              <p className="mt-3 text-xs text-zinc-500">
-                아직 저장한 답변이 없습니다.
-              </p>
+              <p className="text-xs text-zinc-500">아직 저장한 대화가 없습니다.</p>
             ) : (
-              <ul className="mt-3 space-y-2">
+              <ul className="space-y-1.5">
                 {savedChats.map((chat) => (
                   <li
                     key={chat.id}
-                    className="rounded-md border border-zinc-200 bg-white p-3 dark:border-zinc-700 dark:bg-zinc-950"
+                    className="flex items-center justify-between gap-2 rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <time className="text-xs text-zinc-500">
+                    <div className="min-w-0 flex-1">
+                      {/* 제목: title 있으면 title, 없으면 content 앞부분 fallback */}
+                      <p className="truncate text-xs font-medium text-zinc-800 dark:text-zinc-100">
+                        {chat.title ?? chat.content.slice(0, 40)}
+                      </p>
+                      <time className="text-[11px] text-zinc-400">
                         {formatSavedChatDate(chat.created_dt)}
                       </time>
-                      <div className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setOpenSavedChatId((current) =>
-                              current === chat.id ? null : chat.id
-                            )
-                          }
-                          className="rounded px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                        >
-                          {openSavedChatId === chat.id ? "접기" : "대화 보기"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => onDeleteSavedChat(chat.id)}
-                          className="rounded px-2 py-1 text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
-                        >
-                          삭제
-                        </button>
-                      </div>
                     </div>
-                    <p
-                      className={`mt-2 overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-zinc-700 dark:text-zinc-300 ${
-                        openSavedChatId === chat.id ? "max-h-72" : "max-h-16"
-                      }`}
-                    >
-                      {chat.content}
-                    </p>
-                    {chat.ann_ids.length > 0 && (
-                      <p className="mt-2 break-words text-[11px] text-zinc-500">
-                        추천 ID: {chat.ann_ids.join(", ")}
-                      </p>
-                    )}
+                    <div className="flex shrink-0 items-center gap-1">
+                      {/* 이 대화로 돌아가기 — 현재 대화 있으면 이탈 확인 팝업 경유 */}
+                      <button
+                        type="button"
+                        onClick={() => onRestoreChat(chat)}
+                        className="rounded px-2 py-1 text-xs text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-950"
+                      >
+                        돌아가기
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onDeleteSavedChat(chat.id)}
+                        className="rounded px-2 py-1 text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
+                      >
+                        삭제
+                      </button>
+                    </div>
                   </li>
                 ))}
               </ul>
             )}
           </div>
-        )}
+        </div>
+      )}
 
+      <div className="flex-1 overflow-y-auto p-4">
         {messages.length === 0 && !loading && (
           <div className="space-y-3">
             {currentUser && hasSavedFilter ? (
@@ -1590,11 +1691,10 @@ function AuthPanel({
             type="button"
             onClick={onToggleScrappedOnly}
             disabled={!showScrappedOnly && scrapCount === 0}
-            className={`rounded-md border px-2 py-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-              showScrappedOnly
-                ? "border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-700 dark:bg-amber-900/40 dark:text-amber-200"
-                : "border-zinc-300 text-zinc-600 hover:bg-white dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-            }`}
+            className={`rounded-md border px-2 py-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${showScrappedOnly
+              ? "border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-700 dark:bg-amber-900/40 dark:text-amber-200"
+              : "border-zinc-300 text-zinc-600 hover:bg-white dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+              }`}
           >
             {showScrappedOnly ? "전체 결과 보기" : "스크랩만 보기"}
           </button>
@@ -1612,21 +1712,19 @@ function AuthPanel({
       <div className="mb-2 flex gap-1">
         <button
           onClick={() => setAuthMode("login")}
-          className={`rounded-md px-2 py-1 text-xs ${
-            authMode === "login"
-              ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-              : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-          }`}
+          className={`rounded-md px-2 py-1 text-xs ${authMode === "login"
+            ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+            : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            }`}
         >
           로그인
         </button>
         <button
           onClick={() => setAuthMode("signup")}
-          className={`rounded-md px-2 py-1 text-xs ${
-            authMode === "signup"
-              ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-              : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-          }`}
+          className={`rounded-md px-2 py-1 text-xs ${authMode === "signup"
+            ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+            : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            }`}
         >
           회원가입
         </button>

@@ -37,6 +37,7 @@ export type SavedFilter = {
 
 export type SavedChat = {
   id: number;
+  title?: string | null;
   content: string;
   ann_ids: number[];
   created_dt: string;
