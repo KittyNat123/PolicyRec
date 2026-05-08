@@ -7,7 +7,7 @@
 - `user_account_id` (☑️수정됨)  
   - 내부 시스템용 고유 ID (PK)
   - 장기적으로 사용자 관련 테이블의 연결 기준으로 사용하는 것을 권장
-  - 단, 현재 MVP SQL 스키마에서는 `scraps`, `user_filters`, `chat_history`가 `login_id`를 FK로 사용한다
+  - 단, 현재 MVP SQL 스키마에서는 `scraps`, `user_filters`, `saved_chats`가 `login_id`를 FK로 사용한다
   - 따라서 현재 MVP 구현과 쿼리는 `login_id` 기준으로 맞춘다
 
 - `login_id`  
@@ -115,25 +115,21 @@
 
 ---
 
-## F. chat_history (챗봇 대화 기록)
+## F. saved_chats (저장된 대화 목록)
 
-**역할:** 사용자 질문 및 ai답변 요약 대화 로그 저장
+**역할:** 사용자가 명시적으로 저장한 챗봇 대화 전문 및 추천 결과 보관
 
-- `query_embedding`  
-  - 질문을 벡터화하여 저장
+- `content`  
+  - 사용자 질문과 AI 답변이 포함된 대화 전문 (텍스트 형식)
+- `ann_ids`  
+  - 해당 대화에서 추천된 공고들의 ID 배열 (`announcements.id` 참조)
 
 ---
 
-### 활용 흐름
-
-1. 최근 질문(최근 5건) 데이터 추출
-2. 각 질문 embedding 조회
-3. 시간 기반 가중치 적용 (최근일수록 weight ↑)
-4. 하나의 벡터로 통합
-
-👉 결과:
-- 최근 관심사 분석
-- 맞춤형 정보 우선 노출
+**활용:**
+1. 사용자 '저장 목록' UI에서 과거 대화 복원
+2. 추천되었던 공고들을 즉시 재확인
+3. 관심 분야 분석을 위한 텍스트 소스로 활용 가능
 
 ---
 
@@ -144,7 +140,7 @@
 
 ## 2. 사용자 행동 데이터 축적
 - 스크랩 → scraps
-- 검색 → chat_history
+- 검색 및 저장 → saved_chats
 - 필터 → user_filters
 
 ## 3. 추천 생성

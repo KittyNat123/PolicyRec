@@ -89,14 +89,16 @@ CREATE TABLE user_filters (
 );
 
 -- 7. 챗봇 대화 기록 테이블
-CREATE TABLE chat_history (
-  chat_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  login_id VARCHAR REFERENCES users(login_id) ON DELETE CASCADE,
-  user_query TEXT,                        -- 사용자 질문
-  ai_response TEXT,                       -- AI 답변
-  query_embedding VECTOR(768),            -- 질문 벡터 (관심사 분석용)
+CREATE TABLE IF NOT EXISTS saved_chats (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  login_id VARCHAR NOT NULL REFERENCES users(login_id) ON DELETE CASCADE,
+  content TEXT NOT NULL,
+  ann_ids BIGINT[] NOT NULL DEFAULT '{}'::BIGINT[],
   created_dt TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_saved_chats_login_date
+ON saved_chats (login_id, created_dt DESC);
 
 -- 공고 검색 최적화 (지역, 나이, 카테고리)
 CREATE INDEX idx_ann_search ON announcements (region, target_age_min, target_age_max, s_category);
