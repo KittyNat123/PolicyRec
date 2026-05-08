@@ -88,7 +88,7 @@ BEGIN
         (a.target_age_max IS NULL OR a.target_age_max >= user_age)
       )
     )
-  ORDER BY a.embedding <=> query_embedding
+  ORDER BY a.embedding <=> query_embedding, a.id ASC
   LIMIT match_count;
 END;
 $$;

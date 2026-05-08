@@ -9,6 +9,11 @@ import {
   STATUS_BADGE_STYLES,
   formatTargetAgeRange,
 } from "@/lib/utils";
+import {
+  cleanPolicyText,
+  cleanTargetGroup,
+  normalizeApplicationDetails,
+} from "@/lib/policy-normalization";
 import type { SearchResult } from "@/lib/types";
 
 function hasText(value: string | null | undefined) {
@@ -64,6 +69,17 @@ export function PolicyCard({
   const status = recruitmentStatus(item.apply_start_dt, item.apply_end_dt);
   const statusBadge = STATUS_BADGE_STYLES[status];
   const dday = dDayLabel(item.apply_end_dt);
+  const isYouth = isYouthPolicy(item);
+  const summary = cleanPolicyText(item.summary);
+  const provider = cleanPolicyText(item.provider);
+  const targetGroup = cleanTargetGroup(item.target_group, item.target_tags);
+  const additionalConditions = cleanPolicyText(item.additional_conditions);
+  const applicationDetails = normalizeApplicationDetails(
+    item.application_method,
+    item.required_documents
+  );
+  const applicationMethod = applicationDetails.application_method;
+  const requiredDocuments = applicationDetails.required_documents;
   const targetAgeLabel = formatTargetAgeRange(
     item.target_age_min,
     item.target_age_max
@@ -80,7 +96,7 @@ export function PolicyCard({
     [item.provider, item.region, item.title]
   );
   const youthFallbackUrl = youthDetailUrl(item);
-  const detailUrl = item.detail_url ?? youthFallbackUrl;
+  const detailUrl = isYouth ? youthFallbackUrl ?? item.detail_url : item.detail_url;
   const youthSearchKeyword = compactYouthKeyword(item.title) || searchKeyword;
   const youthSearchUrl = `https://www.youthcenter.go.kr/totalSearch/search?keyword=${encodeURIComponent(
     youthSearchKeyword
@@ -105,12 +121,12 @@ export function PolicyCard({
           >
             {status}
           </span>
-          {!item.detail_url && youthFallbackUrl && (
+          {!detailUrl && youthFallbackUrl && (
             <span className="rounded bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700 dark:bg-sky-900/40 dark:text-sky-300">
               온통청년 상세 후보
             </span>
           )}
-          {!item.detail_url && !youthFallbackUrl && (
+          {!detailUrl && !youthFallbackUrl && (
             <span className="rounded bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
               상세 링크 없음
             </span>
@@ -178,14 +194,14 @@ export function PolicyCard({
         ))}
       </div>
 
-      {item.summary && (
+      {summary && (
         <p className="mb-2 line-clamp-2 text-sm text-zinc-600 dark:text-zinc-400">
-          {item.summary}
+          {summary}
         </p>
       )}
 
       <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-zinc-500">
-        {item.provider && <span>제공: {item.provider}</span>}
+        {provider && <span>제공: {provider}</span>}
         <span>
           마감:{" "}
           {item.apply_end_dt ? formatDate(item.apply_end_dt) : "상시/확인필요"}
@@ -202,7 +218,7 @@ export function PolicyCard({
         >
           {expanded ? "접기" : "자세히 보기"}
         </button>
-        {!item.detail_url && youthFallbackUrl && (
+        {!detailUrl && youthFallbackUrl && (
           <>
             <a
               href={youthFallbackUrl}
@@ -226,29 +242,21 @@ export function PolicyCard({
 
       {expanded && (
         <dl className="mt-4 space-y-3 rounded-md bg-zinc-50 p-4 dark:bg-zinc-950">
-          {hasText(item.summary) && (
-            <DetailRow label="요약">{item.summary}</DetailRow>
-          )}
+          {summary && <DetailRow label="요약">{summary}</DetailRow>}
           <DetailRow label="신청 방법">
-            {hasText(item.application_method)
-              ? item.application_method
-              : "공고문/상세 링크 확인 필요"}
+            {applicationMethod ?? "공고문/상세 링크 확인 필요"}
           </DetailRow>
           <DetailRow label="제출 서류">
-            {hasText(item.required_documents)
-              ? item.required_documents
-              : "공고문 확인 필요"}
+            {requiredDocuments ?? "공고문 확인 필요"}
           </DetailRow>
-          {hasText(item.additional_conditions) && (
-            <DetailRow label="추가 조건">
-              {item.additional_conditions}
-            </DetailRow>
+          {additionalConditions && (
+            <DetailRow label="추가 조건">{additionalConditions}</DetailRow>
           )}
-          {hasText(item.provider) && (
-            <DetailRow label="제공 기관">{item.provider}</DetailRow>
+          {provider && (
+            <DetailRow label="제공 기관">{provider}</DetailRow>
           )}
-          {hasText(item.target_group) && (
-            <DetailRow label="대상">{item.target_group}</DetailRow>
+          {targetGroup && (
+            <DetailRow label="대상">{targetGroup}</DetailRow>
           )}
           {hasTargetTags && (
             <DetailRow label="대상 태그">

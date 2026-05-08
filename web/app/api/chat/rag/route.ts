@@ -12,6 +12,12 @@ import type {
   SelfQueryFilters,
 } from "@/lib/gemini";
 import { getLoginIdFromRequest } from "@/lib/auth";
+import {
+  cleanDetailUrl,
+  cleanPolicyText,
+  cleanTargetGroup,
+  normalizeApplicationDetails,
+} from "@/lib/policy-normalization";
 import { supabase } from "@/lib/supabase";
 import { recruitmentStatus } from "@/lib/utils";
 
@@ -108,10 +114,12 @@ type NormalizedResultRow = Record<string, unknown> & {
   s_category: string | null;
   apply_start_dt: string | null;
   apply_end_dt: string | null;
+  target_group: string | null;
   target_tags: string[];
   application_method: string | null;
   required_documents: string | null;
   additional_conditions: string | null;
+  detail_url: string | null;
 };
 
 function buildProfileFilterConflicts(
@@ -195,15 +203,37 @@ function normalizeTargetTags(value: unknown): string[] {
 }
 
 function toNullableString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() !== "" ? value : null;
+  return cleanPolicyText(value);
+}
+
+function toNullableNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function compareBySimilarityDescThenIdAsc(
+  a: Record<string, unknown>,
+  b: Record<string, unknown>
+) {
+  const similarityA = toNullableNumber(a.similarity) ?? 0;
+  const similarityB = toNullableNumber(b.similarity) ?? 0;
+  if (similarityA !== similarityB) return similarityB - similarityA;
+
+  const idA = toNullableNumber(a.id) ?? Number.MAX_SAFE_INTEGER;
+  const idB = toNullableNumber(b.id) ?? Number.MAX_SAFE_INTEGER;
+  return idA - idB;
 }
 
 function normalizeResultRow(row: Record<string, unknown>): NormalizedResultRow {
   const summary =
     typeof row.summary === "string"
-      ? row.summary
+      ? cleanPolicyText(row.summary)
       : typeof row.content === "string"
-        ? row.content
+        ? cleanPolicyText(row.content)
         : null;
   const sCategory =
     typeof row.s_category === "string"
@@ -223,6 +253,11 @@ function normalizeResultRow(row: Record<string, unknown>): NormalizedResultRow {
       : typeof row.end_date === "string"
         ? row.end_date
         : null;
+  const targetTags = normalizeTargetTags(row.target_tags);
+  const applicationDetails = normalizeApplicationDetails(
+    row.application_method,
+    row.required_documents
+  );
 
   return {
     ...row,
@@ -230,10 +265,12 @@ function normalizeResultRow(row: Record<string, unknown>): NormalizedResultRow {
     s_category: sCategory,
     apply_start_dt: applyStart,
     apply_end_dt: applyEnd,
-    target_tags: normalizeTargetTags(row.target_tags),
-    application_method: toNullableString(row.application_method),
-    required_documents: toNullableString(row.required_documents),
+    target_group: cleanTargetGroup(row.target_group, targetTags),
+    target_tags: targetTags,
+    application_method: applicationDetails.application_method,
+    required_documents: applicationDetails.required_documents,
     additional_conditions: toNullableString(row.additional_conditions),
+    detail_url: cleanDetailUrl(row.detail_url),
   };
 }
 
@@ -502,7 +539,7 @@ export async function POST(request: NextRequest) {
         ...normalizeResultRow(row),
         similarity: similarityById.get(row.id as number) ?? 0,
       }))
-      .sort((a, b) => b.similarity - a.similarity)
+      .sort(compareBySimilarityDescThenIdAsc)
       .filter(
         (row) =>
           recruitmentStatus(row.apply_start_dt, row.apply_end_dt) !== "마감"
@@ -525,7 +562,7 @@ export async function POST(request: NextRequest) {
         additional_conditions: toNullableString(record.additional_conditions),
         apply_start_dt: toNullableString(record.apply_start_dt),
         apply_end_dt: toNullableString(record.apply_end_dt),
-        detail_url: toNullableString(record.detail_url),
+        detail_url: cleanDetailUrl(record.detail_url),
       };
     });
 

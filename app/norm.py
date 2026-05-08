@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,8 @@ from app.schema import COMMON_COLUMNS
 RAW_DIR = PROJECT_ROOT / "data" / "raw"
 CLEAN_DIR = PROJECT_ROOT / "data" / "clean"
 OUTPUT_CSV = CLEAN_DIR / "combined.csv"
+
+EMPTY_TEXT_VALUES = {"none", "null", "undefined", "nan", "n/a", "-"}
 
 
 def empty_record(source: str, raw_item: Any) -> dict[str, str]:
@@ -49,10 +52,39 @@ def _split_period_text(period_text: str) -> tuple[str, str]:
 def _join_nonempty(values: list[Any], separator: str = " | ") -> str:
     parts: list[str] = []
     for value in values:
-        text = str(value or "").strip()
+        text = _clean_text(value)
         if text:
             parts.append(text)
     return separator.join(parts)
+
+
+def _clean_text(value: Any) -> str:
+    if value is None:
+        return ""
+
+    text = str(value).strip()
+    if not text or text.lower() in EMPTY_TEXT_VALUES:
+        return ""
+    return text
+
+
+def _is_encoded_placeholder(text: str) -> bool:
+    if len(text) < 16:
+        return False
+    if re.search(r"\s|[.@가-힣]", text):
+        return False
+    if not re.search(r"[A-Za-z]", text) or text.isdigit():
+        return False
+    return bool(re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", text))
+
+
+def _format_application_channel(label: str, value: Any) -> str:
+    text = _clean_text(value)
+    if not text:
+        return ""
+    if _is_encoded_placeholder(text):
+        return f"{label}: 공고문 확인 필요" if "이메일" in label else ""
+    return f"{label}: {text}"
 
 
 def _format_age_range(min_age: Any, max_age: Any, fallback: Any = "") -> str:
@@ -90,10 +122,20 @@ def _format_income_condition(item: dict[str, Any]) -> str:
 
 def _pick_first_url(*values: Any) -> str:
     for value in values:
-        text = str(value or "").strip()
+        text = _clean_text(value)
         if text:
             return text
     return ""
+
+
+def _pick_youth_detail_url(item: dict[str, Any]) -> str:
+    return _pick_first_url(
+        item.get("refUrlAddr2", ""),
+        item.get("refUrlAddr1", ""),
+        item.get("detailUrl", ""),
+        item.get("url", ""),
+        item.get("aplyUrlAddr", ""),
+    )
 
 
 def get_latest_raw_json_file(source_name: str) -> Path | None:
@@ -160,8 +202,8 @@ def normalize_biz_payload(payload: Any, raw_path: Path) -> list[dict[str, str]]:
             record["support_type"] = str(
                 item.get("pldirSportRealmMlsfcCodeNm", "") or item.get("support_type", "")
             )
-            record["application_method"] = str(item.get("reqstMthPapersCn", ""))
-            record["required_documents"] = str(item.get("reqstMthPapersCn", ""))
+            record["application_method"] = _clean_text(item.get("reqstMthPapersCn", ""))
+            record["required_documents"] = _clean_text(item.get("reqstMthPapersCn", ""))
             record["detail_url"] = _pick_first_url(
                 item.get("pblancUrl", ""),
                 item.get("rceptEngnHmpgUrl", ""),
@@ -214,7 +256,7 @@ def normalize_kst_payload(payload: Any, raw_path: Path) -> list[dict[str, str]]:
             record["operating_agency"] = str(
                 item.get("biz_prch_dprt_nm", "") or item.get("pbanc_ntrp_nm", "")
             )
-            record["target_group"] = str(item.get("aply_trgt", ""))
+            record["target_group"] = _clean_text(item.get("aply_trgt", ""))
             record["target_age"] = str(item.get("biz_trgt_age", ""))
             record["target_detail"] = _join_nonempty(
                 [item.get("aply_trgt_ctnt", ""), item.get("aply_excl_trgt_ctnt", "")],
@@ -224,12 +266,24 @@ def normalize_kst_payload(payload: Any, raw_path: Path) -> list[dict[str, str]]:
             record["support_type"] = str(item.get("supt_biz_clsfc", ""))
             record["application_method"] = _join_nonempty(
                 [
-                    f"온라인 접수: {item.get('aply_mthd_onli_rcpt_istc', '')}",
-                    f"이메일 접수: {item.get('aply_mthd_eml_rcpt_istc', '')}",
-                    f"팩스 접수: {item.get('aply_mthd_fax_rcpt_istc', '')}",
-                    f"우편 접수: {item.get('aply_mthd_pssr_rcpt_istc', '')}",
-                    f"방문 접수: {item.get('aply_mthd_vst_rcpt_istc', '')}",
-                    f"기타 접수: {item.get('aply_mthd_etc_istc', '')}",
+                    _format_application_channel(
+                        "온라인 접수", item.get("aply_mthd_onli_rcpt_istc", "")
+                    ),
+                    _format_application_channel(
+                        "이메일 접수", item.get("aply_mthd_eml_rcpt_istc", "")
+                    ),
+                    _format_application_channel(
+                        "팩스 접수", item.get("aply_mthd_fax_rcpt_istc", "")
+                    ),
+                    _format_application_channel(
+                        "우편 접수", item.get("aply_mthd_pssr_rcpt_istc", "")
+                    ),
+                    _format_application_channel(
+                        "방문 접수", item.get("aply_mthd_vst_rcpt_istc", "")
+                    ),
+                    _format_application_channel(
+                        "기타 접수", item.get("aply_mthd_etc_istc", "")
+                    ),
                 ],
                 separator="\n",
             )
@@ -301,21 +355,15 @@ def normalize_youth_payload(payload: Any, raw_path: Path) -> list[dict[str, str]
             record["target_detail"] = str(item.get("addAplyQlfcCndCn", ""))
             record["income_condition"] = _format_income_condition(item)
             record["support_type"] = str(item.get("plcySprtCn", ""))
-            record["application_method"] = str(item.get("plcyAplyMthdCn", ""))
-            record["required_documents"] = str(item.get("sbmsnDcmntCn", ""))
+            record["application_method"] = _clean_text(item.get("plcyAplyMthdCn", ""))
+            record["required_documents"] = _clean_text(item.get("sbmsnDcmntCn", ""))
             record["additional_conditions"] = _join_nonempty(
                 [item.get("addAplyQlfcCndCn", ""), item.get("etcMttrCn", "")],
                 separator="\n\n",
             )
             record["apply_start"] = str(item.get("aplyYmd", "") or item.get("bizPrdBgngYmd", ""))
             record["apply_end"] = str(item.get("bizPrdEndYmd", ""))
-            record["detail_url"] = _pick_first_url(
-                item.get("aplyUrlAddr", ""),
-                item.get("refUrlAddr1", ""),
-                item.get("refUrlAddr2", ""),
-                item.get("detailUrl", ""),
-                item.get("url", ""),
-            )
+            record["detail_url"] = _pick_youth_detail_url(item)
 
         records.append(record)
 

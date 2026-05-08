@@ -257,6 +257,25 @@ const CATEGORY_ALIASES: Record<string, string> = {
   강의: "교육/멘토링",
 };
 
+const SELF_QUERY_CACHE_MAX = 200;
+const selfQueryCache = new Map<string, SelfQueryFilters>();
+
+function cloneSelfQueryFilters(value: SelfQueryFilters): SelfQueryFilters {
+  return { ...value };
+}
+
+function rememberSelfQueryFilters(
+  query: string,
+  value: SelfQueryFilters
+): SelfQueryFilters {
+  if (!selfQueryCache.has(query) && selfQueryCache.size >= SELF_QUERY_CACHE_MAX) {
+    const oldestKey = selfQueryCache.keys().next().value;
+    if (oldestKey) selfQueryCache.delete(oldestKey);
+  }
+  selfQueryCache.set(query, cloneSelfQueryFilters(value));
+  return value;
+}
+
 export function hasSelfQueryFilterSignal(query: string) {
   const compact = query.replace(/\s/g, "");
   if (!compact) return false;
@@ -326,7 +345,16 @@ async function generateSelfQueryJson(query: string) {
         },
       });
       const text = response.text?.trim();
-      if (text) return text;
+      if (text) {
+        const jsonText = stripJsonFence(text);
+        try {
+          JSON.parse(jsonText);
+          return jsonText;
+        } catch (error) {
+          lastError = error;
+          continue;
+        }
+      }
       lastError = new Error(`${model} self-query response was empty.`);
     } catch (error) {
       lastError = error;
@@ -342,10 +370,12 @@ export async function extractSelfQueryFilters(
 ): Promise<SelfQueryFilters> {
   const normalizedQuery = query.trim();
   if (!normalizedQuery) return emptySelfQueryResult("", "empty_query");
+  const cached = selfQueryCache.get(normalizedQuery);
+  if (cached) return cloneSelfQueryFilters(cached);
 
   try {
     const text = await generateSelfQueryJson(normalizedQuery);
-    const parsed = JSON.parse(stripJsonFence(text)) as Record<string, unknown>;
+    const parsed = JSON.parse(text) as Record<string, unknown>;
     const confidence =
       typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
         ? Math.max(0, Math.min(1, parsed.confidence))
@@ -357,14 +387,14 @@ export async function extractSelfQueryFilters(
         : normalizedQuery;
 
     if (confidence < SELF_QUERY_CONFIDENCE_THRESHOLD) {
-      return {
+      return rememberSelfQueryFilters(normalizedQuery, {
         ...emptySelfQueryResult(normalizedQuery, "low_confidence"),
         semantic_query: normalizedQuery,
         confidence,
-      };
+      });
     }
 
-    return {
+    return rememberSelfQueryFilters(normalizedQuery, {
       region: normalizeAllowedValue(
         parsed.region,
         ALLOWED_SELF_QUERY_REGIONS,
@@ -379,7 +409,7 @@ export async function extractSelfQueryFilters(
       semantic_query: semanticQuery,
       confidence,
       applied: true,
-    };
+    });
   } catch (error) {
     console.warn("[gemini] self-query extraction failed:", error);
     return emptySelfQueryResult(normalizedQuery, "extraction_failed");
@@ -407,7 +437,7 @@ async function generateWithFallback(prompt: string, maxOutputTokens = 5000) {
         contents: prompt,
         config: {
           systemInstruction: POLICY_SYSTEM_INSTRUCTION,
-          temperature: 0.3,
+          temperature: 0,
           maxOutputTokens,
         },
       });

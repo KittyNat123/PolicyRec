@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getLoginIdFromRequest } from "@/lib/auth";
+import {
+  cleanDetailUrl,
+  cleanPolicyText,
+  cleanTargetGroup,
+  normalizeApplicationDetails,
+} from "@/lib/policy-normalization";
 import { supabase } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
@@ -56,10 +62,12 @@ type NormalizedResultRow = Record<string, unknown> & {
   s_category: string | null;
   apply_start_dt: string | null;
   apply_end_dt: string | null;
+  target_group: string | null;
   target_tags: string[];
   application_method: string | null;
   required_documents: string | null;
   additional_conditions: string | null;
+  detail_url: string | null;
   similarity: number;
 };
 
@@ -101,15 +109,15 @@ function normalizeTargetTags(value: unknown): string[] {
 }
 
 function toNullableString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() !== "" ? value : null;
+  return cleanPolicyText(value);
 }
 
 function normalizeResultRow(row: Record<string, unknown>): NormalizedResultRow {
   const summary =
     typeof row.summary === "string"
-      ? row.summary
+      ? cleanPolicyText(row.summary)
       : typeof row.content === "string"
-        ? row.content
+        ? cleanPolicyText(row.content)
         : null;
   const sCategory =
     typeof row.s_category === "string"
@@ -129,6 +137,11 @@ function normalizeResultRow(row: Record<string, unknown>): NormalizedResultRow {
       : typeof row.end_date === "string"
         ? row.end_date
         : null;
+  const targetTags = normalizeTargetTags(row.target_tags);
+  const applicationDetails = normalizeApplicationDetails(
+    row.application_method,
+    row.required_documents
+  );
 
   return {
     ...row,
@@ -137,10 +150,12 @@ function normalizeResultRow(row: Record<string, unknown>): NormalizedResultRow {
     s_category: sCategory,
     apply_start_dt: applyStart,
     apply_end_dt: applyEnd,
-    target_tags: normalizeTargetTags(row.target_tags),
-    application_method: toNullableString(row.application_method),
-    required_documents: toNullableString(row.required_documents),
+    target_group: cleanTargetGroup(row.target_group, targetTags),
+    target_tags: targetTags,
+    application_method: applicationDetails.application_method,
+    required_documents: applicationDetails.required_documents,
     additional_conditions: toNullableString(row.additional_conditions),
+    detail_url: cleanDetailUrl(row.detail_url),
     similarity: 0,
   };
 }
