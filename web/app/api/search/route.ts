@@ -269,6 +269,52 @@ function buildRegionCandidates(filterRegion: string): string[] {
   return Array.from(new Set([...group, NATIONWIDE_REGION]));
 }
 
+function calculateFinalScore(
+  row: Record<string, unknown>,
+  similarity: number,
+  filterCategory: string | null,
+  filterRegion: string | null,
+  userAge: number | null
+) {
+  const simScore = similarity * 100;
+  let bonus = 0;
+
+  // 1. 지역 가중치 (+35): '전국'이 아닌 선택한 지역과 정확히 일치할 때만 부여
+  if (filterRegion && row.region === filterRegion) {
+    bonus += 35;
+  }
+
+  // 2. 분야 가중치 (+18): 선택한 카테고리와 일치할 때 부여
+  if (
+    filterCategory &&
+    (row.s_category === filterCategory || row.category === filterCategory)
+  ) {
+    bonus += 18;
+  }
+
+  // 3. 나이 가중치 (+10): 사용자의 나이가 공고의 연령 범위 내에 있을 때 부여
+  if (userAge !== null) {
+    const min = toNullableNumber(row.target_age_min);
+    const max = toNullableNumber(row.target_age_max);
+    if ((min === null || min <= userAge) && (max === null || max >= userAge)) {
+      bonus += 10;
+    }
+  }
+
+  return { finalScore: simScore + bonus, matchBonus: bonus };
+}
+
+function compareByFinalScoreDescThenIdAsc(
+  a: Record<string, unknown> & { final_score: number },
+  b: Record<string, unknown> & { final_score: number }
+) {
+  if (a.final_score !== b.final_score) return b.final_score - a.final_score;
+
+  const idA = toNullableNumber(a.id) ?? Number.MAX_SAFE_INTEGER;
+  const idB = toNullableNumber(b.id) ?? Number.MAX_SAFE_INTEGER;
+  return idA - idB;
+}
+
 function compareBySimilarityDescThenIdAsc(
   a: Record<string, unknown>,
   b: Record<string, unknown>
@@ -280,6 +326,30 @@ function compareBySimilarityDescThenIdAsc(
   const idA = toNullableNumber(a.id) ?? Number.MAX_SAFE_INTEGER;
   const idB = toNullableNumber(b.id) ?? Number.MAX_SAFE_INTEGER;
   return idA - idB;
+}
+
+function printRerankLogs(rows: any[], queryInfo: any) {
+  console.log(`\n==================================================`);
+  console.log(`[RERANK TEST] 검색 조건:`, queryInfo);
+
+  const before = [...rows].sort(compareBySimilarityDescThenIdAsc as any).slice(0, 10);
+  console.log(`\n--- [Before] 순수 유사도 순 (상위 10건) ---`);
+  before.forEach((r, i) => {
+    const sim = Number(r.similarity ?? 0) * 100;
+    const title = String(r.title ?? "").substring(0, 20);
+    console.log(`${i + 1}위. [${r.id}] ${title}... | 유사도: ${sim.toFixed(2)}`);
+  });
+
+  const after = [...rows].sort(compareByFinalScoreDescThenIdAsc as any).slice(0, 10);
+  console.log(`\n--- [After] 가중치 합산 리랭킹 순 (상위 10건) ---`);
+  after.forEach((r, i) => {
+    const sim = Number(r.similarity ?? 0) * 100;
+    const title = String(r.title ?? "").substring(0, 20);
+    console.log(
+      `${i + 1}위. [${r.id}] ${title}... | 유사도: ${sim.toFixed(2)} | 가산점: +${r.match_bonus} | 최종: ${Number(r.final_score).toFixed(2)}`
+    );
+  });
+  console.log(`==================================================\n`);
 }
 
 function applyResultFilters(
@@ -539,16 +609,39 @@ export async function POST(request: NextRequest) {
       const similarityById = new Map(
         hybridRows.map((row) => [row.id, Number(row.similarity ?? 0)])
       );
-      const results =
-        richError || !richRowsRaw
-          ? hybridRows.map(normalizeResultRow)
-          : ((richRowsRaw ?? []) as Array<Record<string, unknown>>)
-            .map((row) => ({
-              ...row,
-              similarity: similarityById.get(row.id as number) ?? 0,
-            }))
-            .sort(compareBySimilarityDescThenIdAsc)
-            .map(normalizeResultRow);
+      let results: any[] = [];
+      if (richError || !richRowsRaw) {
+        results = hybridRows.map(normalizeResultRow);
+      } else {
+        const mappedRows = ((richRowsRaw ?? []) as Array<Record<string, unknown>>).map((row) => {
+          const similarity = similarityById.get(row.id as number) ?? 0;
+          const { finalScore, matchBonus } = calculateFinalScore(
+            row,
+            similarity,
+            effectiveFilterCategory,
+            effectiveFilterRegion,
+            effectiveUserAge
+          );
+          return {
+            ...row,
+            similarity,
+            final_score: finalScore,
+            match_bonus: matchBonus,
+          };
+        });
+
+        // 로그 출력
+        printRerankLogs(mappedRows, {
+          query,
+          filterCategory: effectiveFilterCategory,
+          filterRegion: effectiveFilterRegion,
+          userAge: effectiveUserAge,
+        });
+
+        results = mappedRows
+          .sort(compareByFinalScoreDescThenIdAsc as any)
+          .map(normalizeResultRow);
+      }
       return NextResponse.json({
         results,
         rpc_used: richError ? "hybrid" : "hybrid_with_table",
@@ -640,13 +733,32 @@ export async function POST(request: NextRequest) {
       basicRows.map((r) => [r.id, r.similarity])
     );
 
-    // similarity 순으로 정렬해서 반환
-    const merged: Array<Record<string, unknown> & { similarity: number }> = richRows
-      .map((row) => ({
+    const mappedRows = richRows.map((row) => {
+      const similarity = similarityById.get(row.id as number) ?? 0;
+      const { finalScore, matchBonus } = calculateFinalScore(
+        row,
+        similarity,
+        effectiveFilterCategory,
+        effectiveFilterRegion,
+        effectiveUserAge
+      );
+      return {
         ...row,
-        similarity: similarityById.get(row.id as number) ?? 0,
-      }))
-      .sort(compareBySimilarityDescThenIdAsc);
+        similarity,
+        final_score: finalScore,
+        match_bonus: matchBonus,
+      } as any;
+    });
+
+    // 로그 출력
+    printRerankLogs(mappedRows, {
+      query,
+      filterCategory: effectiveFilterCategory,
+      filterRegion: effectiveFilterRegion,
+      userAge: effectiveUserAge,
+    });
+
+    const merged = mappedRows.sort(compareByFinalScoreDescThenIdAsc as any);
 
     // 클라이언트 사이드 필터 적용 (구 RPC는 필터 인자 안 받으므로 여기서 처리)
     const filtered = applyResultFilters(
