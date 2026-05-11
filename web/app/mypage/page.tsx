@@ -54,7 +54,7 @@ type Recommendation = {
 
 export default function MyPage() {
   const router = useRouter();
-  
+
   // Edit Mode
   const [isEditingInfo, setIsEditingInfo] = useState(false);
 
@@ -68,6 +68,7 @@ export default function MyPage() {
     user_type: "선택 안함",
   });
   const [infoLoading, setInfoLoading] = useState(false);
+  const [editInfo, setEditInfo] = useState<UserInfo | null>(null);
   const [saveMessage, setSaveMessage] = useState("");
 
   // Scraps State
@@ -76,7 +77,7 @@ export default function MyPage() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [scrapTotalCount, setScrapTotalCount] = useState(0);
-  
+
   // Animation key for sliding effect
   const [scrapAnimKey, setScrapAnimKey] = useState(0);
 
@@ -163,19 +164,17 @@ export default function MyPage() {
 
   const handleInfoSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSaveMessage("저장 중...");
+    setSaveMessage("저장 중입니다...");
     try {
       const res = await fetch("/api/mypage/info", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(info),
+        body: JSON.stringify(editInfo),
       });
       if (res.ok) {
-        setSaveMessage("저장되었습니다.");
-        setTimeout(() => {
-          setSaveMessage("");
-          setIsEditingInfo(false);
-        }, 1500);
+        setInfo(editInfo!);
+        setSaveMessage("");
+        setIsEditingInfo(false);
       } else {
         setSaveMessage("저장에 실패했습니다.");
       }
@@ -190,7 +189,7 @@ export default function MyPage() {
 
   const handleUnscrap = async (annId: number) => {
     if (!confirm("이 공고의 스크랩을 해제하시겠습니까?")) return;
-    
+
     try {
       const res = await fetch("/api/mypage/scraps", {
         method: "DELETE",
@@ -208,24 +207,24 @@ export default function MyPage() {
     }
   };
 
-  const currentRegion = info.regions.length > 0 ? info.regions[0] : ALL;
-  const currentCategory = info.categories.length > 0 ? info.categories[0] : ALL;
+  const activeInfo = isEditingInfo && editInfo ? editInfo : info;
+  const currentRegion = activeInfo.regions.length > 0 ? activeInfo.regions[0] : ALL;
+  const currentCategory = activeInfo.categories.length > 0 ? activeInfo.categories[0] : ALL;
 
   const renderPagination = () => {
     if (totalPages <= 1) return null;
     const pages = Array.from({ length: totalPages }, (_, i) => i + 1);
-    
+
     return (
       <div className="mt-6 flex items-center justify-center gap-2">
         {pages.map((p) => (
           <button
             key={p}
             onClick={() => setPage(p)}
-            className={`w-8 h-8 rounded-full text-sm font-bold transition-all ${
-              p === page 
-                ? 'bg-blue-600 text-white shadow-md' 
+            className={`w-8 h-8 rounded-full text-sm font-bold transition-all ${p === page
+                ? 'bg-blue-600 text-white shadow-md'
                 : 'bg-white border border-zinc-200 text-zinc-600 hover:bg-zinc-100 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-700'
-            }`}
+              }`}
           >
             {p}
           </button>
@@ -237,7 +236,8 @@ export default function MyPage() {
   return (
     <div className="min-h-screen bg-zinc-50 p-6 pb-20 dark:bg-black">
       {/* Sliding Animation Style */}
-      <style dangerouslySetInnerHTML={{__html: `
+      <style dangerouslySetInnerHTML={{
+        __html: `
         @keyframes slideInRight {
           from { transform: translateX(30px); opacity: 0; }
           to { transform: translateX(0); opacity: 1; }
@@ -261,7 +261,10 @@ export default function MyPage() {
             <h2 className="text-lg font-bold text-zinc-800 dark:text-zinc-100">내 정보 설정</h2>
             {!isEditingInfo && (
               <button
-                onClick={() => setIsEditingInfo(true)}
+                onClick={() => {
+                  setEditInfo({ ...info });
+                  setIsEditingInfo(true);
+                }}
                 className="text-sm font-medium text-blue-600 hover:underline dark:text-blue-400"
               >
                 정보 수정하기
@@ -301,8 +304,8 @@ export default function MyPage() {
                   <label className="mb-1 block text-xs font-semibold text-zinc-600 dark:text-zinc-400">닉네임</label>
                   <input
                     type="text"
-                    value={info.nickname}
-                    onChange={(e) => setInfo({ ...info, nickname: e.target.value })}
+                    value={editInfo?.nickname || ""}
+                    onChange={(e) => setEditInfo({ ...editInfo!, nickname: e.target.value })}
                     className="w-full rounded-md border border-zinc-300 p-2 text-sm focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-black dark:text-white"
                   />
                 </div>
@@ -310,8 +313,8 @@ export default function MyPage() {
                   <label className="mb-1 block text-xs font-semibold text-zinc-600 dark:text-zinc-400">나이</label>
                   <input
                     type="number"
-                    value={info.age_group}
-                    onChange={(e) => setInfo({ ...info, age_group: e.target.value })}
+                    value={editInfo?.age_group || ""}
+                    onChange={(e) => setEditInfo({ ...editInfo!, age_group: e.target.value })}
                     className="w-full rounded-md border border-zinc-300 p-2 text-sm focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-black dark:text-white"
                   />
                 </div>
@@ -319,7 +322,7 @@ export default function MyPage() {
                   <label className="mb-1 block text-xs font-semibold text-zinc-600 dark:text-zinc-400">관심 지역</label>
                   <select
                     value={currentRegion}
-                    onChange={(e) => setInfo({ ...info, regions: e.target.value === ALL ? [] : [e.target.value] })}
+                    onChange={(e) => setEditInfo({ ...editInfo!, regions: e.target.value === ALL ? [] : [e.target.value] })}
                     className="w-full rounded-md border border-zinc-300 p-2 text-sm focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-black dark:text-white"
                   >
                     {REGIONS.map((opt) => (
@@ -331,7 +334,7 @@ export default function MyPage() {
                   <label className="mb-1 block text-xs font-semibold text-zinc-600 dark:text-zinc-400">관심 분야</label>
                   <select
                     value={currentCategory}
-                    onChange={(e) => setInfo({ ...info, categories: e.target.value === ALL ? [] : [e.target.value] })}
+                    onChange={(e) => setEditInfo({ ...editInfo!, categories: e.target.value === ALL ? [] : [e.target.value] })}
                     className="w-full rounded-md border border-zinc-300 p-2 text-sm focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-black dark:text-white"
                   >
                     {CATEGORIES.map((opt) => (
@@ -342,8 +345,8 @@ export default function MyPage() {
                 <div>
                   <label className="mb-1 block text-xs font-semibold text-zinc-600 dark:text-zinc-400">사용자 유형</label>
                   <select
-                    value={info.user_type}
-                    onChange={(e) => setInfo({ ...info, user_type: e.target.value })}
+                    value={editInfo?.user_type || "선택 안함"}
+                    onChange={(e) => setEditInfo({ ...editInfo!, user_type: e.target.value })}
                     className="w-full rounded-md border border-zinc-300 p-2 text-sm focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-black dark:text-white"
                   >
                     {USER_TYPES.map((opt) => (
@@ -352,7 +355,7 @@ export default function MyPage() {
                   </select>
                 </div>
               </div>
-              
+
               <div className="flex items-center gap-3 pt-2">
                 <button type="submit" className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
                   저장
@@ -460,7 +463,7 @@ export default function MyPage() {
           <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
             {info.nickname || "사용자"}님의 관심 설정(<strong>{currentCategory}</strong> / <strong>{currentRegion}</strong> / <strong>{info.user_type}</strong>)과 스크랩 이력을 바탕으로 분석한 추천 공고입니다.
           </p>
-          
+
           {recLoading ? (
             <div className="py-4 text-center text-sm text-zinc-500">맞춤 공고를 분석 중입니다...</div>
           ) : recommendations.length === 0 ? (
