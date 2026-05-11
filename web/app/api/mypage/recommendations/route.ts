@@ -6,6 +6,37 @@ import { recruitmentStatus } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
+type UserInfoRow = {
+  regions: string[] | null;
+  categories: string[] | null;
+  age_group: string | null;
+  user_type: string | null;
+};
+
+type ScrapAnnouncementRow = {
+  title: string | null;
+  summary: string | null;
+};
+
+type ScrapRow = {
+  ann_id: number;
+  announcements: ScrapAnnouncementRow | ScrapAnnouncementRow[] | null;
+};
+
+type HybridMatchRow = {
+  id: number;
+};
+
+type RecommendationRow = {
+  id: number;
+  title: string;
+  summary: string | null;
+  s_category: string | null;
+  region: string | null;
+  apply_end_dt: string | null;
+  detail_url: string;
+};
+
 export async function GET(request: NextRequest) {
   const loginId = getLoginIdFromRequest(request);
   if (!loginId) {
@@ -19,11 +50,12 @@ export async function GET(request: NextRequest) {
       .select("regions, categories, age_group, user_type")
       .eq("login_id", loginId)
       .maybeSingle();
+    const typedUserInfo = userInfo as UserInfoRow | null;
 
-    const region = userInfo?.regions?.[0] || null;
-    const category = userInfo?.categories?.[0] || null;
-    const age = userInfo?.age_group ? parseInt(userInfo.age_group, 10) : null;
-    const userType = userInfo?.user_type || "알 수 없음";
+    const region = typedUserInfo?.regions?.[0] || null;
+    const category = typedUserInfo?.categories?.[0] || null;
+    const age = typedUserInfo?.age_group ? parseInt(typedUserInfo.age_group, 10) : null;
+    const userType = typedUserInfo?.user_type || "알 수 없음";
 
     // 2. 스크랩 이력 가져오기 (최대 5건)
     const { data: scraps } = await supabase
@@ -36,10 +68,15 @@ export async function GET(request: NextRequest) {
       .order("created_dt", { ascending: false })
       .limit(5);
 
-    const scrappedIds = new Set((scraps || []).map((s: any) => s.ann_id));
-    const scrapTitles = (scraps || [])
-      .map((s: any) => s.announcements?.title)
-      .filter(Boolean)
+    const typedScraps = (scraps ?? []) as ScrapRow[];
+    const scrappedIds = new Set(typedScraps.map((s) => s.ann_id));
+    const scrapTitles = typedScraps
+      .map((s) =>
+        Array.isArray(s.announcements)
+          ? s.announcements[0]?.title ?? null
+          : s.announcements?.title ?? null
+      )
+      .filter((title): title is string => Boolean(title))
       .join(", ");
 
     // 3. 두 가지 개별 쿼리 텍스트 준비
@@ -78,7 +115,7 @@ export async function GET(request: NextRequest) {
     const reasonMap = new Map<number, string>();
 
     // 스크랩 기반 1순위 (있을 경우 1건)
-    const scrapRows = (scrapRes.data || []) as any[];
+    const scrapRows = (scrapRes.data ?? []) as HybridMatchRow[];
     for (const row of scrapRows) {
       if (!scrappedIds.has(row.id)) {
         recommendedIds.push(row.id);
@@ -90,7 +127,7 @@ export async function GET(request: NextRequest) {
     // 내 정보 기반 2순위 (스크랩 기반이 있으면 1건, 없으면 2건)
     const targetProfileCount = hasScraps ? 1 : 2;
     let addedProfileCount = 0;
-    const profileRows = (profileRes.data || []) as any[];
+    const profileRows = (profileRes.data ?? []) as HybridMatchRow[];
     
     for (const row of profileRows) {
       if (!scrappedIds.has(row.id) && !recommendedIds.includes(row.id)) {
@@ -117,14 +154,15 @@ export async function GET(request: NextRequest) {
     }
 
     // 모집 여부 등 추가 정보 가공 및 순서 유지(recommendedIds 순서대로)
+    const typedRecommendations = (recommendations ?? []) as RecommendationRow[];
     const formattedRecs = recommendedIds
-      .map(id => recommendations?.find((r: any) => r.id === id))
-      .filter(Boolean)
-      .map((rec: any) => {
+      .map((id) => typedRecommendations.find((rec) => rec.id === id))
+      .filter((rec): rec is RecommendationRow => Boolean(rec))
+      .map((rec) => {
         return {
           ...rec,
           status: recruitmentStatus(null, rec.apply_end_dt),
-          reason: reasonMap.get(rec.id) || "추천 공고입니다."
+          reason: reasonMap.get(rec.id) || "추천 공고입니다.",
         };
       });
 

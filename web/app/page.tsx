@@ -639,15 +639,6 @@ export default function Home() {
     showToast(`"${chat.title ?? "저장된 대화"}"를 불러왔습니다.`);
   }
 
-  function startNewChat() {
-    // ✅ 자동저장: 로그인 상태이고 저장할 대화가 있을 때 백그라운드에서 저장
-    // void로 호출 = fire-and-forget. 저장 성공/실패 여부와 무관하게 새 채팅 즉시 진행
-    if (currentUser && chatMessages.length > 0) {
-      void saveCurrentChat(true); // silent=true: 자동저장이므로 토스트 생략
-    }
-    doStartNewChat();
-  }
-
   async function deleteSavedChat(id: number) {
     const res = await fetch("/api/user/saved-chats", {
       method: "DELETE",

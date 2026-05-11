@@ -92,6 +92,7 @@ export default function MyPage() {
   useEffect(() => {
     fetchInfo();
     fetchRecommendations();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Fetch scraps when page changes
@@ -99,7 +100,7 @@ export default function MyPage() {
     fetchScraps(page);
   }, [page]);
 
-  const fetchInfo = async () => {
+  async function fetchInfo() {
     setInfoLoading(true);
     try {
       const res = await fetch("/api/mypage/info", { cache: "no-store" });
@@ -125,9 +126,9 @@ export default function MyPage() {
     } finally {
       setInfoLoading(false);
     }
-  };
+  }
 
-  const fetchScraps = async (p: number) => {
+  async function fetchScraps(p: number) {
     setScrapsLoading(true);
     try {
       const res = await fetch(`/api/mypage/scraps/detail?page=${p}`, { cache: "no-store" });
@@ -144,9 +145,9 @@ export default function MyPage() {
     } finally {
       setScrapsLoading(false);
     }
-  };
+  }
 
-  const fetchRecommendations = async () => {
+  async function fetchRecommendations() {
     setRecLoading(true);
     try {
       const res = await fetch("/api/mypage/recommendations", { cache: "no-store" });
@@ -160,7 +161,7 @@ export default function MyPage() {
     } finally {
       setRecLoading(false);
     }
-  };
+  }
 
   const handleInfoSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -178,7 +179,7 @@ export default function MyPage() {
       } else {
         setSaveMessage("저장에 실패했습니다.");
       }
-    } catch (e) {
+    } catch {
       setSaveMessage("오류가 발생했습니다.");
     }
   };
