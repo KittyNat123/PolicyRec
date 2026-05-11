@@ -279,25 +279,22 @@ function calculateFinalScore(
   const simScore = similarity * 100;
   let bonus = 0;
 
-  // 1. 지역 가중치 (+35): '전국'이 아닌 선택한 지역과 정확히 일치할 때만 부여
+  // 1. 지역 가중치 (+30): '전국'이 아닌 선택한 지역과 정확히 일치할 때만 부여
   if (filterRegion && row.region === filterRegion) {
-    bonus += 35;
+    bonus += 30;
   }
 
-  // 2. 분야 가중치 (+18): 선택한 카테고리와 일치할 때 부여
-  if (
-    filterCategory &&
-    (row.s_category === filterCategory || row.category === filterCategory)
-  ) {
-    bonus += 18;
-  }
-
-  // 3. 나이 가중치 (+10): 사용자의 나이가 공고의 연령 범위 내에 있을 때 부여
+  // 2. 나이 가중치 (+10): 나이 제한이 없는 일반 공고(NULL)는 제외하고, 
+  // 내 나이를 구체적으로 명시하여 타겟팅한 정책에만 부여
   if (userAge !== null) {
     const min = toNullableNumber(row.target_age_min);
     const max = toNullableNumber(row.target_age_max);
-    if ((min === null || min <= userAge) && (max === null || max >= userAge)) {
-      bonus += 10;
+    
+    // min 또는 max 중 하나라도 숫자가 존재하여 나이 범위를 좁혔을 때만 타겟팅으로 인정
+    if (min !== null || max !== null) {
+      if ((min === null || min <= userAge) && (max === null || max >= userAge)) {
+        bonus += 10;
+      }
     }
   }
 
