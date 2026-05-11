@@ -84,6 +84,18 @@ const LEGACY_RICH_COLUMNS = [
 ].join(",");
 
 const NATIONWIDE_REGION = "전국";
+const KST_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Seoul",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+const REGION_ALIAS_GROUPS: string[][] = [
+  ["강원특별자치도", "강원도"],
+  ["전북특별자치도", "전라북도"],
+  ["제주특별자치도", "제주도"],
+  ["세종특별자치시", "세종시"],
+];
 
 type AnnouncementSchema = "primary_extended" | "primary" | "legacy";
 type SupabaseLikeError = { message?: string };
@@ -247,6 +259,16 @@ function toNullableNumber(value: unknown): number | null {
   return null;
 }
 
+function toKstDateKey(date: Date): string {
+  return KST_DATE_FORMATTER.format(date);
+}
+
+function buildRegionCandidates(filterRegion: string): string[] {
+  const group = REGION_ALIAS_GROUPS.find((items) => items.includes(filterRegion));
+  if (!group) return [filterRegion, NATIONWIDE_REGION];
+  return Array.from(new Set([...group, NATIONWIDE_REGION]));
+}
+
 function compareBySimilarityDescThenIdAsc(
   a: Record<string, unknown>,
   b: Record<string, unknown>
@@ -271,9 +293,10 @@ function applyResultFilters(
     filtered = filtered.filter((r) => r.s_category === filterCategory);
   }
   if (filterRegion) {
+    const regionCandidates = new Set(buildRegionCandidates(filterRegion));
     // hybrid와 동일 규칙: 특정 지역 + 전국 함께 표시
     filtered = filtered.filter(
-      (r) => r.region === filterRegion || r.region === NATIONWIDE_REGION
+      (r) => typeof r.region === "string" && regionCandidates.has(r.region)
     );
   }
   if (userAge !== null) {
@@ -323,10 +346,10 @@ function buildFilteredAnnouncementsQuery(
     tableQuery = tableQuery.eq(categoryColumn, filterCategory);
   }
   if (filterRegion) {
-    tableQuery = tableQuery.in("region", [filterRegion, NATIONWIDE_REGION]);
+    tableQuery = tableQuery.in("region", buildRegionCandidates(filterRegion));
   }
   if (options.onlyOpen) {
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const today = toKstDateKey(new Date()); // YYYY-MM-DD (KST)
     tableQuery = tableQuery.gte(endDateColumn, today);
   }
 

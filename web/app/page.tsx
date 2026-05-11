@@ -758,21 +758,15 @@ export default function Home() {
   }) {
     const trimmed = query.trim();
     const targetAge = parseTargetAge(filterAge);
-    const hasFilter =
-      filterCategory !== ALL ||
-      filterRegion !== ALL ||
-      Boolean(filterAge.trim()) ||
-      filterStatus !== ALL;
 
     const isAppend = options?.appendOffset !== undefined;
     const effectiveSortBy: ServerSortBy =
       options?.sortOverride ?? toServerSortBy(sortBy);
     const effectiveOffset = options?.appendOffset ?? 0;
-
-    if (!trimmed && !hasFilter) {
-      setError("검색어를 입력하거나 필터를 하나 이상 선택해주세요.");
-      return;
-    }
+    // 검색어 없는 필터-only 조회에서 기본은 마감 제외 결과를 요청한다.
+    // (마감 포함 조회를 원하는 경우: 모집상태=마감 또는 showClosed=true)
+    const includeOnlyOpen =
+      trimmed === "" && filterStatus !== "마감" && !showClosed;
     if (filterAge.trim() && targetAge === null) {
       setError("나이는 0~120 사이의 숫자로 입력해주세요.");
       return;
@@ -799,6 +793,7 @@ export default function Home() {
             sort_by: effectiveSortBy,
             offset: effectiveOffset,
             limit: PAGE_SIZE,
+            only_open: includeOnlyOpen,
           }),
         }),
       });
@@ -940,14 +935,6 @@ export default function Home() {
         )
       )
       : statusFilteredResults;
-  const canSearch = Boolean(
-    query.trim() ||
-    filterCategory !== ALL ||
-    filterRegion !== ALL ||
-    filterAge.trim() ||
-    filterStatus !== ALL
-  );
-
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-black">
       <main className="max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
@@ -1008,7 +995,7 @@ export default function Home() {
             />
             <button
               onClick={() => handleSearch()}
-              disabled={loading || !canSearch}
+              disabled={loading}
               className="rounded-lg bg-blue-600 px-6 py-3 text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {loading ? "검색 중..." : "검색"}
@@ -1056,7 +1043,7 @@ export default function Home() {
                   onChange={(e) => setShowClosed(e.target.checked)}
                   className="h-4 w-4 cursor-pointer rounded border-zinc-300 text-blue-600 focus:ring-blue-500 dark:border-zinc-600 dark:bg-zinc-800"
                 />
-                모집완료까지 보기
+                마감 공고도 확인하기
               </label>
               <button
                 type="button"

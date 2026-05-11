@@ -1,6 +1,40 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getLoginIdFromRequest } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+import { dDayLabel, recruitmentStatus } from "@/lib/utils";
+
+type AnnouncementLite = {
+  id: number;
+  title: string | null;
+  summary: string | null;
+  s_category: string | null;
+  region: string | null;
+  apply_end_dt: string | null;
+  detail_url: string | null;
+};
+
+type ScrapWithAnnouncement = {
+  scrap_id: number;
+  created_dt: string;
+  ann_id: number;
+  announcements: AnnouncementLite | AnnouncementLite[] | null;
+};
+
+function pickAnnouncement(
+  value: ScrapWithAnnouncement["announcements"]
+): AnnouncementLite | null {
+  if (!value) return null;
+  return Array.isArray(value) ? value[0] ?? null : value;
+}
+
+function isUrgentByEndDate(applyEnd: string | null): boolean {
+  if (!applyEnd) return false;
+  const dday = dDayLabel(applyEnd);
+  if (dday === "D-day") return true;
+  if (!dday.startsWith("D-")) return false;
+  const days = Number(dday.slice(2));
+  return Number.isInteger(days) && days >= 1 && days <= 7;
+}
 
 export async function GET(request: NextRequest) {
   const loginId = getLoginIdFromRequest(request);
@@ -35,34 +69,23 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "스크랩 내역을 불러오지 못했습니다." }, { status: 500 });
   }
 
-  const now = new Date();
-  const nextWeek = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-
   // 2. Map and determine urgency
-  const formattedScraps = (data || []).map((row: any) => {
-    const ann = row.announcements || {};
-    let isUrgent = false;
-    let isClosed = false;
-
-    if (ann.apply_end_dt) {
-      const endDate = new Date(ann.apply_end_dt);
-      if (endDate < now) {
-        isClosed = true;
-      } else if (endDate <= nextWeek) {
-        isUrgent = true;
-      }
-    }
+  const formattedScraps = ((data ?? []) as ScrapWithAnnouncement[]).map((row) => {
+    const ann = pickAnnouncement(row.announcements);
+    const applyEnd = ann?.apply_end_dt ?? null;
+    const isClosed = recruitmentStatus(null, applyEnd) === "마감";
+    const isUrgent = !isClosed && isUrgentByEndDate(applyEnd);
 
     return {
       scrap_id: row.scrap_id,
       ann_id: row.ann_id,
       scrapped_at: row.created_dt,
-      title: ann.title || "제목 없음",
-      summary: ann.summary || null,
-      s_category: ann.s_category || null,
-      region: ann.region || null,
-      detail_url: ann.detail_url || "#",
-      apply_end_dt: ann.apply_end_dt,
+      title: ann?.title || "제목 없음",
+      summary: ann?.summary || null,
+      s_category: ann?.s_category || null,
+      region: ann?.region || null,
+      detail_url: ann?.detail_url || "#",
+      apply_end_dt: applyEnd,
       is_urgent: isUrgent,
       is_closed: isClosed,
     };
