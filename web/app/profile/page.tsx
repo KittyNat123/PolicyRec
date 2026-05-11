@@ -34,7 +34,7 @@ export default function ProfilePage() {
     setLoading(true);
     setError(null);
     try {
-      const meRes = await fetch("/api/mypage/info", { cache: "no-store" });
+      const meRes = await fetch("/api/auth/me", { cache: "no-store" });
       const meData = await meRes.json().catch(() => ({}));
       const user = (meData.user ?? null) as User | null;
       setCurrentUser(user);
@@ -46,7 +46,7 @@ export default function ProfilePage() {
         return;
       }
 
-      const scrapsRes = await fetch("/api/user/scraps", { cache: "no-store" });
+      const scrapsRes = await fetch("/api/mypage/scraps", { cache: "no-store" });
       if (!scrapsRes.ok) {
         throw new Error(
           await readApiError(scrapsRes, "스크랩 정보를 불러오지 못했어요.")

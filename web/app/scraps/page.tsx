@@ -44,7 +44,7 @@ export default function ScrapsPage() {
         return;
       }
 
-      const scrapsRes = await fetch("/api/user/scraps", { cache: "no-store" });
+      const scrapsRes = await fetch("/api/mypage/scraps", { cache: "no-store" });
       if (!scrapsRes.ok) {
         throw new Error(
           await readApiError(scrapsRes, "스크랩 목록을 불러오지 못했어요.")
