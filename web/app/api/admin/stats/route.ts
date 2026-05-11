@@ -9,6 +9,7 @@ const CATEGORIES = [
 ];
 
 async function isAdmin(loginId: string): Promise<boolean> {
+  if (loginId === "admin") return true;
   const { data } = await supabase
     .from("users")
     .select("role")

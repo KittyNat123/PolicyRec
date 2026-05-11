@@ -1,21 +1,21 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
-import { PolicyCard } from "@/components/PolicyCard";
-import type { SavedFilter, SearchResult, User } from "@/lib/types";
+import { useRouter } from "next/navigation";
+import { AppHeader } from "@/components/AppHeader";
+import { ALL_OPTION, CATEGORIES, REGIONS, USER_TYPES } from "@/lib/profile-options";
+import type { SavedFilter, User } from "@/lib/types";
 
-type ScrapRow = {
-  ann_id?: unknown;
+type UserInfo = {
+  email?: string | null;
+  phone?: string | null;
+  nickname?: string | null;
+  age_group?: string | null;
+  regions?: string[] | null;
+  categories?: string[] | null;
+  interest_keywords?: string[] | null;
+  user_type?: string | null;
 };
-
-function normalizeScrapIds(scraps: ScrapRow[]) {
-  return scraps
-    .map((scrap) =>
-      typeof scrap.ann_id === "number" ? scrap.ann_id : Number(scrap.ann_id)
-    )
-    .filter((id) => Number.isInteger(id) && id > 0);
-}
 
 async function readApiError(response: Response, fallback: string) {
   const data = await response.json().catch(() => ({}));
@@ -23,195 +23,368 @@ async function readApiError(response: Response, fallback: string) {
 }
 
 export default function ProfilePage() {
+  const router = useRouter();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [savedFilter, setSavedFilter] = useState<SavedFilter | null>(null);
-  const [scrappedIds, setScrappedIds] = useState<Set<number>>(new Set());
-  const [recentScraps, setRecentScraps] = useState<SearchResult[]>([]);
+  const [info, setInfo] = useState<UserInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  async function loadProfile() {
-    setLoading(true);
-    setError(null);
-    try {
-      const meRes = await fetch("/api/auth/me", { cache: "no-store" });
-      const meData = await meRes.json().catch(() => ({}));
-      const user = (meData.user ?? null) as User | null;
-      setCurrentUser(user);
-      setSavedFilter((meData.filter ?? null) as SavedFilter | null);
-
-      if (!user) {
-        setScrappedIds(new Set());
-        setRecentScraps([]);
-        return;
-      }
-
-      const scrapsRes = await fetch("/api/mypage/scraps", { cache: "no-store" });
-      if (!scrapsRes.ok) {
-        throw new Error(
-          await readApiError(scrapsRes, "스크랩 정보를 불러오지 못했어요.")
-        );
-      }
-
-      const scrapsData = await scrapsRes.json().catch(() => ({}));
-      const ids = normalizeScrapIds((scrapsData.scraps ?? []) as ScrapRow[]);
-      setScrappedIds(new Set(ids));
-
-      if (ids.length === 0) {
-        setRecentScraps([]);
-        return;
-      }
-
-      const detailsRes = await fetch("/api/announcements/by-ids", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids: ids.slice(0, 3) }),
-      });
-      if (!detailsRes.ok) {
-        throw new Error(
-          await readApiError(detailsRes, "최근 스크랩을 불러오지 못했어요.")
-        );
-      }
-
-      const detailsData = await detailsRes.json().catch(() => ({}));
-      setRecentScraps((detailsData.results ?? []) as SearchResult[]);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "프로필을 불러오지 못했어요.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function toggleScrap(annId: number) {
-    if (!currentUser) return;
-
-    const res = await fetch("/api/mypage/scraps", {
-      method: scrappedIds.has(annId) ? "DELETE" : "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ann_id: annId }),
-    });
-
-    if (!res.ok) {
-      setError(await readApiError(res, "스크랩 처리에 실패했어요."));
-      return;
-    }
-
-    setScrappedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(annId)) {
-        next.delete(annId);
-      } else {
-        next.add(annId);
-      }
-      return next;
-    });
-    setRecentScraps((prev) => prev.filter((item) => item.id !== annId));
-  }
+  const [editOpen, setEditOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [formName, setFormName] = useState("");
+  const [formEmail, setFormEmail] = useState("");
+  const [formPhone, setFormPhone] = useState("");
+  const [formAge, setFormAge] = useState("");
+  const [formRegion, setFormRegion] = useState(ALL_OPTION);
+  const [formCategory, setFormCategory] = useState(ALL_OPTION);
+  const [formUserType, setFormUserType] = useState<string>(USER_TYPES[0]);
+  const [deadlineNotice, setDeadlineNotice] = useState(true);
+  const [recommendNotice, setRecommendNotice] = useState(true);
+  const [applicationNotice, setApplicationNotice] = useState(false);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void loadProfile();
-  }, []);
+    void (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const meRes = await fetch("/api/auth/me", { cache: "no-store" });
+        const meData = await meRes.json().catch(() => ({}));
+        const user = (meData.user ?? null) as User | null;
+        setCurrentUser(user);
+        setSavedFilter((meData.filter ?? null) as SavedFilter | null);
+
+        if (!user) {
+          router.replace("/?auth=login");
+          return;
+        }
+
+        if (user) {
+          const infoRes = await fetch("/api/mypage/info", { cache: "no-store" });
+          if (!infoRes.ok && infoRes.status !== 401) {
+            throw new Error(await readApiError(infoRes, "프로필 정보를 불러오지 못했어요."));
+          }
+          const infoData = await infoRes.json().catch(() => ({}));
+          const loadedInfo = (infoData.info ?? null) as UserInfo | null;
+          setInfo(loadedInfo);
+          setFormName(loadedInfo?.nickname ?? "");
+          setFormEmail(loadedInfo?.email ?? "");
+          setFormPhone(loadedInfo?.phone ?? "");
+          setFormAge(loadedInfo?.age_group ?? "");
+          setFormRegion(loadedInfo?.regions?.[0] ?? ALL_OPTION);
+          setFormCategory(loadedInfo?.categories?.[0] ?? ALL_OPTION);
+          setFormUserType(loadedInfo?.user_type ?? USER_TYPES[0]);
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "프로필을 불러오지 못했어요.");
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [router]);
+
+  const displayName = info?.nickname || currentUser?.login_id || "김지현";
+  const age = info?.age_group || savedFilter?.target_age?.toString() || "27";
+  const region = info?.regions?.[0] || savedFilter?.regions?.[0] || "서울";
+  const userType = info?.user_type || "취업준비생";
+  const email = info?.email || `${currentUser?.login_id ?? "user"}@policyrec.local`;
+  const phone = info?.phone || "미등록";
+  const categories = info?.categories?.length
+    ? info.categories
+    : savedFilter?.categories ?? ["주거", "취업", "금융"];
+  const targets = [userType, "청년", "저소득", "전체"].filter(Boolean);
+
+  async function saveProfile() {
+    setSaving(true);
+    setMessage(null);
+    try {
+      const res = await fetch("/api/mypage/info", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          nickname: formName,
+          email: formEmail,
+          phone: formPhone,
+          age_group: formAge,
+          regions: formRegion === ALL_OPTION ? [] : [formRegion],
+          categories: formCategory === ALL_OPTION ? [] : [formCategory],
+          user_type: formUserType === USER_TYPES[0] ? null : formUserType,
+          interest_keywords: info?.interest_keywords ?? [],
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "프로필을 저장하지 못했어요.");
+      setInfo({
+        ...info,
+        nickname: formName,
+        email: formEmail,
+        phone: formPhone,
+        age_group: formAge,
+        regions: formRegion === ALL_OPTION ? [] : [formRegion],
+        categories: formCategory === ALL_OPTION ? [] : [formCategory],
+        user_type: formUserType === USER_TYPES[0] ? null : formUserType,
+      });
+      setEditOpen(false);
+      setMessage("프로필을 저장했습니다.");
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "프로필을 저장하지 못했어요.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
-    <main className="min-h-screen bg-zinc-50 px-4 py-8 dark:bg-black sm:px-6">
-      <div className="mx-auto max-w-5xl">
-        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-sm text-zinc-500">PolicyRec</p>
-            <h1 className="text-3xl font-bold tracking-tight">내 프로필</h1>
-          </div>
-          <div className="flex gap-2">
-            <Link
-              href="/"
-              className="rounded-md border border-zinc-300 px-3 py-2 text-sm hover:bg-white dark:border-zinc-700 dark:hover:bg-zinc-900"
-            >
-              검색으로 돌아가기
-            </Link>
-            <Link
-              href="/scraps"
-              className="rounded-md bg-zinc-900 px-3 py-2 text-sm text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-            >
-              스크랩 목록
-            </Link>
-          </div>
-        </div>
-
+    <div className="min-h-screen bg-slate-50 text-slate-950">
+      <AppHeader currentUser={currentUser} />
+      <main className="mx-auto max-w-3xl px-4 py-7 sm:px-6">
         {loading && (
-          <div className="rounded-lg border border-zinc-200 bg-white p-6 text-sm text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900">
-            프로필을 불러오는 중...
+          <div className="rounded-lg border border-slate-200 bg-white p-5 text-sm text-slate-500">
+            프로필을 불러오고 있어요.
           </div>
         )}
 
         {error && (
-          <div className="mb-4 rounded-lg bg-red-50 p-4 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
+          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             {error}
           </div>
         )}
 
         {!loading && !currentUser && (
-          <section className="rounded-lg border border-zinc-200 bg-white p-6 text-sm text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
-            로그인 후 프로필과 스크랩 목록을 확인할 수 있어요.
-          </section>
+          <div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600">
+            로그인하면 프로필과 관심 정책 설정을 확인할 수 있어요.
+          </div>
         )}
 
         {!loading && currentUser && (
-          <div className="space-y-5">
-            <section className="rounded-lg border border-zinc-200 bg-white p-5 dark:border-zinc-700 dark:bg-zinc-900">
-              <p className="text-sm text-zinc-500">로그인 계정</p>
-              <p className="mt-1 text-xl font-semibold">{currentUser.login_id}</p>
-            </section>
-
-            <section className="grid gap-3 sm:grid-cols-3">
-              <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-900">
-                <p className="text-sm text-zinc-500">스크랩</p>
-                <p className="mt-1 text-2xl font-semibold">{scrappedIds.size}개</p>
-              </div>
-              <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-900">
-                <p className="text-sm text-zinc-500">저장 지역</p>
-                <p className="mt-1 font-medium">
-                  {savedFilter?.regions?.[0] ?? "없음"}
-                </p>
-              </div>
-              <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-900">
-                <p className="text-sm text-zinc-500">저장 카테고리</p>
-                <p className="mt-1 font-medium">
-                  {savedFilter?.categories?.[0] ?? "없음"}
-                </p>
-              </div>
-            </section>
-
-            <section>
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <h2 className="text-lg font-semibold">최근 스크랩</h2>
-                <Link
-                  href="/scraps"
-                  className="text-sm text-blue-600 hover:underline dark:text-blue-400"
-                >
-                  전체 보기
-                </Link>
-              </div>
-              {recentScraps.length === 0 ? (
-                <div className="rounded-lg border border-zinc-200 bg-white p-6 text-sm text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900">
-                  아직 스크랩한 정책이 없어요.
+          <div className="space-y-4">
+            <section className="rounded-[24px] bg-gradient-to-br from-blue-600 to-blue-800 p-6 text-white">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-4">
+                  <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white/20 text-2xl font-bold">
+                    {displayName.slice(0, 1)}
+                  </div>
+                  <div>
+                    <h1 className="text-2xl font-bold">{displayName}</h1>
+                    <p className="mt-1 text-sm text-blue-100">{currentUser.login_id}</p>
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {[`${age}세`, region, userType].map((item) => (
+                        <span key={item} className="rounded-full bg-white/15 px-2.5 py-1 text-xs font-bold">
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
                 </div>
-              ) : (
-                <ul className="space-y-3">
-                  {recentScraps.map((item) => (
-                    <PolicyCard
-                      key={item.id}
-                      item={item}
-                      canScrap
-                      isScrapped={scrappedIds.has(item.id)}
-                      onToggleScrap={toggleScrap}
-                    />
-                  ))}
-                </ul>
-              )}
+                <button
+                  type="button"
+                  onClick={() => setEditOpen((value) => !value)}
+                  className="rounded-xl bg-white/15 px-4 py-2 text-sm font-bold hover:bg-white/25"
+                >
+                  {editOpen ? "닫기" : "편집"}
+                </button>
+              </div>
             </section>
+
+            {message && (
+              <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-700">
+                {message}
+              </div>
+            )}
+
+            {editOpen && (
+              <InfoPanel title="프로필 편집">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <InputField label="이름" value={formName} onChange={setFormName} placeholder="예: 김지현" />
+                  <InputField label="이메일" value={formEmail} onChange={setFormEmail} placeholder="name@example.com" />
+                  <InputField label="휴대폰 번호" value={formPhone} onChange={setFormPhone} placeholder="010-1234-5678" />
+                  <InputField label="나이" value={formAge} onChange={setFormAge} placeholder="예: 25" type="number" />
+                  <SelectField label="사용자 유형" value={formUserType} onChange={setFormUserType} options={USER_TYPES} />
+                  <SelectField label="지역" value={formRegion} onChange={setFormRegion} options={REGIONS} />
+                  <SelectField label="관심 카테고리" value={formCategory} onChange={setFormCategory} options={CATEGORIES} />
+                </div>
+                <div className="mt-4 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => void saveProfile()}
+                    disabled={saving}
+                    className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {saving ? "저장 중..." : "저장"}
+                  </button>
+                </div>
+              </InfoPanel>
+            )}
+
+            <InfoPanel title="기본 정보">
+              <InfoRow label="이름" value={displayName} />
+              <InfoRow label="이메일" value={email} />
+              <InfoRow label="연락처" value={phone} />
+              <InfoRow label="나이" value={age} />
+            </InfoPanel>
+
+            <InfoPanel title="거주지 및 직업">
+              <InfoRow label="거주 지역" value={region} />
+              <InfoRow label="직업 상태" value={userType} />
+            </InfoPanel>
+
+            <InfoPanel title="정책 관심 설정">
+              <ChipSet label="나는 해당됩니다" values={targets} activeValues={targets.slice(0, 2)} />
+              <ChipSet label="관심 분야" values={["주거", "창업", "취업", "교육", "복지", "금융", "문화"]} activeValues={categories} />
+            </InfoPanel>
+
+            <InfoPanel title="알림 설정">
+              <ToggleRow label="마감 임박 알림" sub="스크랩한 정책 마감 7일 전 알림" active={deadlineNotice} onToggle={() => setDeadlineNotice((value) => !value)} />
+              <ToggleRow label="맞춤 정책 추천" sub="새로운 맞춤 정책 등록 시 알림" active={recommendNotice} onToggle={() => setRecommendNotice((value) => !value)} />
+              <ToggleRow label="신청 결과 알림" sub="정책 심사 결과 통보" active={applicationNotice} onToggle={() => setApplicationNotice((value) => !value)} />
+            </InfoPanel>
+
+            <InfoPanel title="보안">
+              {["비밀번호 변경", "2단계 인증 설정", "로그인 기록 보기"].map((item) => (
+                <button key={item} className="flex w-full items-center justify-between py-3 text-left text-sm font-semibold text-slate-700">
+                  {item}
+                  <span className="text-slate-300">›</span>
+                </button>
+              ))}
+            </InfoPanel>
           </div>
         )}
+      </main>
+    </div>
+  );
+}
+
+function InfoPanel({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-5">
+      <h2 className="text-lg font-bold text-slate-950">{title}</h2>
+      <div className="mt-4 space-y-3">{children}</div>
+    </section>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-4 text-sm">
+      <span className="text-slate-500">{label}</span>
+      <span className="font-semibold text-slate-900">{value}</span>
+    </div>
+  );
+}
+
+function InputField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  type?: string;
+}) {
+  return (
+    <label className="grid gap-2 text-sm font-semibold text-slate-700">
+      <span>{label}</span>
+      <input
+        type={type}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className="rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+      />
+    </label>
+  );
+}
+
+function SelectField({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: readonly string[];
+}) {
+  return (
+    <label className="grid gap-2 text-sm font-semibold text-slate-700">
+      <span>{label}</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+      >
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function ChipSet({
+  label,
+  values,
+  activeValues,
+}: {
+  label: string;
+  values: string[];
+  activeValues: readonly string[];
+}) {
+  return (
+    <div>
+      <p className="mb-2 text-sm text-slate-500">{label}</p>
+      <div className="flex flex-wrap gap-2">
+        {values.map((value) => {
+          const active = activeValues.includes(value);
+          return (
+            <span
+              key={value}
+              className={`rounded-full border px-3 py-2 text-sm font-bold ${
+                active
+                  ? "border-blue-600 bg-blue-600 text-white"
+                  : "border-slate-200 text-slate-600"
+              }`}
+            >
+              {value}
+            </span>
+          );
+        })}
       </div>
-    </main>
+    </div>
+  );
+}
+
+function ToggleRow({
+  label,
+  sub,
+  active,
+  onToggle,
+}: {
+  label: string;
+  sub: string;
+  active: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <div>
+        <p className="text-sm font-bold text-slate-800">{label}</p>
+        <p className="mt-1 text-xs text-slate-400">{sub}</p>
+      </div>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-pressed={active}
+        className={`h-6 w-11 rounded-full p-1 transition ${active ? "bg-blue-600" : "bg-slate-200"}`}
+      >
+        <span className={`block h-4 w-4 rounded-full bg-white transition ${active ? "translate-x-5" : ""}`} />
+      </button>
+    </div>
   );
 }

@@ -19,6 +19,7 @@ export type SearchResult = {
   additional_conditions?: string | null;
   detail_url: string | null;
   similarity: number;
+  scrap_count?: number;
 };
 
 export type User = {
@@ -32,6 +33,7 @@ export type SavedFilter = {
   regions: string[] | null;
   categories: string[] | null;
   target_age: number | null;
+  user_type?: string | null;
   created_dt?: string;
 };
 

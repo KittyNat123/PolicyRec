@@ -51,6 +51,8 @@ export async function POST(request: NextRequest) {
   const region = normalizeFilterValue(body.region);
   const category = normalizeFilterValue(body.category);
   const targetAge = normalizeAge(body.target_age);
+  const profileRegions = region ? [region] : [];
+  const profileCategories = category ? [category] : [];
 
   const { error: deleteError } = await supabase
     .from("user_filters")
@@ -62,13 +64,25 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: deleteError.message }, { status: 500 });
   }
 
+  const { error: userInfoError } = await supabase.from("user_info").upsert({
+    login_id: loginId,
+    age_group: targetAge !== null ? String(targetAge) : null,
+    regions: profileRegions,
+    categories: profileCategories,
+    updated_dt: new Date().toISOString(),
+  });
+
+  if (userInfoError) {
+    return NextResponse.json({ error: userInfoError.message }, { status: 500 });
+  }
+
   const { data, error } = await supabase
     .from("user_filters")
     .insert({
       login_id: loginId,
       filter_name: DEFAULT_FILTER_NAME,
-      regions: region ? [region] : [],
-      categories: category ? [category] : [],
+      regions: profileRegions,
+      categories: profileCategories,
       target_age: targetAge,
     })
     .select("filter_id,filter_name,regions,categories,target_age,created_dt")
@@ -80,4 +94,3 @@ export async function POST(request: NextRequest) {
 
   return NextResponse.json({ filter: data });
 }
-

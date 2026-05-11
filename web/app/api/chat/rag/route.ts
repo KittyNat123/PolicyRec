@@ -28,28 +28,62 @@ async function loadUserContext(
   const loginId = getLoginIdFromRequest(request);
   if (!loginId) return undefined;
 
-  const { data: filter } = await supabase
-    .from("user_filters")
-    .select("regions,categories,target_age")
-    .eq("login_id", loginId)
-    .order("created_dt", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const [filterResult, userInfoResult] = await Promise.all([
+    supabase
+      .from("user_filters")
+      .select("regions,categories,target_age")
+      .eq("login_id", loginId)
+      .order("created_dt", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from("user_info")
+      .select("regions,categories,age_group,user_type")
+      .eq("login_id", loginId)
+      .maybeSingle(),
+  ]);
+
+  const filter = filterResult.data;
+  const userInfo = userInfoResult.data as {
+    regions?: string[] | null;
+    categories?: string[] | null;
+    age_group?: string | null;
+    user_type?: string | null;
+  } | null;
 
   const regions = (filter?.regions ?? []) as unknown[];
   const categories = (filter?.categories ?? []) as unknown[];
+  const fallbackRegions = (userInfo?.regions ?? []) as unknown[];
+  const fallbackCategories = (userInfo?.categories ?? []) as unknown[];
   const region =
-    typeof regions[0] === "string" && regions[0] !== "전국" && regions[0] !== "전체"
-      ? (regions[0] as string)
+    typeof (regions[0] ?? fallbackRegions[0]) === "string" &&
+    (regions[0] ?? fallbackRegions[0]) !== "전국" &&
+    (regions[0] ?? fallbackRegions[0]) !== "전체"
+      ? ((regions[0] ?? fallbackRegions[0]) as string)
       : null;
   const category =
-    typeof categories[0] === "string" && categories[0] !== "전체"
-      ? (categories[0] as string)
+    typeof (categories[0] ?? fallbackCategories[0]) === "string" &&
+    (categories[0] ?? fallbackCategories[0]) !== "전체"
+      ? ((categories[0] ?? fallbackCategories[0]) as string)
+      : null;
+  const fallbackAge =
+    typeof userInfo?.age_group === "string" && userInfo.age_group.trim()
+      ? Number(userInfo.age_group)
       : null;
   const targetAge =
-    typeof filter?.target_age === "number" ? filter.target_age : null;
+    typeof filter?.target_age === "number"
+      ? filter.target_age
+      : Number.isInteger(fallbackAge)
+        ? fallbackAge
+        : null;
 
-  return { loginId, region, category, targetAge };
+  return {
+    loginId,
+    region,
+    category,
+    targetAge,
+    userType: userInfo?.user_type ?? null,
+  };
 }
 
 export const dynamic = "force-dynamic";
@@ -404,6 +438,7 @@ function hasUserProfile(userContext: RagUserContext | undefined): boolean {
   return Boolean(
     userContext.region ||
       userContext.category ||
+      userContext.userType ||
       (userContext.targetAge !== null && userContext.targetAge !== undefined)
   );
 }
@@ -412,12 +447,13 @@ function hasUserProfile(userContext: RagUserContext | undefined): boolean {
 function buildSavedFilterPrefix(userContext: RagUserContext): string {
   const parts: string[] = [];
   if (userContext.region) parts.push(`지역: ${userContext.region}`);
+  if (userContext.userType) parts.push(`사용자 유형: ${userContext.userType}`);
   if (userContext.category) parts.push(`카테고리: ${userContext.category}`);
   if (userContext.targetAge !== null && userContext.targetAge !== undefined) {
     parts.push(`나이: ${userContext.targetAge}세`);
   }
   if (parts.length === 0) return "";
-  return `현재 저장된 필터(${parts.join(", ")})를 바탕으로 관련 정책을 추천합니다.\n\n`;
+  return `현재 저장된 정보(${parts.join(", ")})를 바탕으로 추천을 시작합니다.\n\n`;
 }
 
 const ASK_PROFILE_REPLY = `더 정확한 추천을 위해 몇 가지만 알려주세요!
@@ -489,11 +525,13 @@ export async function POST(request: NextRequest) {
       region: effectiveFilterRegion,
       category: effectiveFilterCategory,
       targetAge: effectiveUserAge,
+      userType: userContext?.userType ?? null,
     };
     const profileContributionContext: RagUserContext = {
       loginId: userContext?.loginId ?? null,
       region: selfQuery?.region ? null : userContext?.region ?? null,
       category: selfQuery?.category ? null : userContext?.category ?? null,
+      userType: userContext?.userType ?? null,
       targetAge:
         selfQuery?.target_age !== null && selfQuery?.target_age !== undefined
           ? null

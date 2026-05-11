@@ -117,6 +117,18 @@ type NormalizedResultRow = Record<string, unknown> & {
   additional_conditions: string | null;
   detail_url: string | null;
 };
+type RerankRow = Record<string, unknown> & {
+  id: number;
+  similarity?: number;
+  final_score: number;
+  match_bonus: number;
+};
+type RerankQueryInfo = {
+  query: string;
+  filterCategory: string | null;
+  filterRegion: string | null;
+  userAge: number | null;
+};
 
 function buildFilterConflicts({
   uiCategory,
@@ -325,11 +337,11 @@ function compareBySimilarityDescThenIdAsc(
   return idA - idB;
 }
 
-function printRerankLogs(rows: any[], queryInfo: any) {
+function printRerankLogs(rows: RerankRow[], queryInfo: RerankQueryInfo) {
   console.log(`\n==================================================`);
   console.log(`[RERANK TEST] 검색 조건:`, queryInfo);
 
-  const before = [...rows].sort(compareBySimilarityDescThenIdAsc as any).slice(0, 10);
+  const before = [...rows].sort(compareBySimilarityDescThenIdAsc).slice(0, 10);
   console.log(`\n--- [Before] 순수 유사도 순 (상위 10건) ---`);
   before.forEach((r, i) => {
     const sim = Number(r.similarity ?? 0) * 100;
@@ -337,7 +349,7 @@ function printRerankLogs(rows: any[], queryInfo: any) {
     console.log(`${i + 1}위. [${r.id}] ${title}... | 유사도: ${sim.toFixed(2)}`);
   });
 
-  const after = [...rows].sort(compareByFinalScoreDescThenIdAsc as any).slice(0, 10);
+  const after = [...rows].sort(compareByFinalScoreDescThenIdAsc).slice(0, 10);
   console.log(`\n--- [After] 가중치 합산 리랭킹 순 (상위 10건) ---`);
   after.forEach((r, i) => {
     const sim = Number(r.similarity ?? 0) * 100;
@@ -485,7 +497,7 @@ async function searchByFiltersOnly(
     similarity: 0,
   }));
 
-  return { results, hasMore, error: null };
+  return { results: await attachScrapCounts(results), hasMore, error: null };
 }
 
 async function selectAnnouncementRowsByIds(ids: number[]) {
@@ -503,6 +515,27 @@ async function selectAnnouncementRowsByIds(ids: number[]) {
   }
 
   return { data, error };
+}
+
+async function attachScrapCounts<T extends Record<string, unknown>>(rows: T[]) {
+  const ids = rows
+    .map((row) => toNullableNumber(row.id))
+    .filter((id): id is number => id !== null && Number.isInteger(id) && id > 0);
+  if (ids.length === 0) {
+    return rows.map((row) => ({ ...row, scrap_count: 0 }));
+  }
+
+  const { data } = await supabase.from("scraps").select("ann_id").in("ann_id", ids);
+  const countById = new Map<number, number>();
+  for (const scrap of (data ?? []) as Array<{ ann_id?: unknown }>) {
+    const annId = toNullableNumber(scrap.ann_id);
+    if (annId) countById.set(annId, (countById.get(annId) ?? 0) + 1);
+  }
+
+  return rows.map((row) => {
+    const id = toNullableNumber(row.id);
+    return { ...row, scrap_count: id ? countById.get(id) ?? 0 : 0 };
+  });
 }
 
 export async function POST(request: NextRequest) {
@@ -606,7 +639,7 @@ export async function POST(request: NextRequest) {
       const similarityById = new Map(
         hybridRows.map((row) => [row.id, Number(row.similarity ?? 0)])
       );
-      let results: any[] = [];
+      let results: NormalizedResultRow[] = [];
       if (richError || !richRowsRaw) {
         results = hybridRows.map(normalizeResultRow);
       } else {
@@ -621,10 +654,11 @@ export async function POST(request: NextRequest) {
           );
           return {
             ...row,
+            id: row.id as number,
             similarity,
             final_score: finalScore,
             match_bonus: matchBonus,
-          };
+          } satisfies RerankRow;
         });
 
         // 로그 출력
@@ -636,11 +670,12 @@ export async function POST(request: NextRequest) {
         });
 
         results = mappedRows
-          .sort(compareByFinalScoreDescThenIdAsc as any)
+          .sort(compareByFinalScoreDescThenIdAsc)
           .map(normalizeResultRow);
       }
+      const resultsWithScrapCounts = await attachScrapCounts(results);
       return NextResponse.json({
-        results,
+        results: resultsWithScrapCounts,
         rpc_used: richError ? "hybrid" : "hybrid_with_table",
         self_query: selfQuery,
         filter_conflicts: filterConflicts,
@@ -715,7 +750,7 @@ export async function POST(request: NextRequest) {
         effectiveUserAge
       ).slice(0, DEFAULT_MATCH_COUNT);
       return NextResponse.json({
-        results: fallbackRows,
+        results: await attachScrapCounts(fallbackRows),
         rpc_used: "basic_only",
         self_query: selfQuery,
         filter_conflicts: filterConflicts,
@@ -741,10 +776,11 @@ export async function POST(request: NextRequest) {
       );
       return {
         ...row,
+        id: row.id as number,
         similarity,
         final_score: finalScore,
         match_bonus: matchBonus,
-      } as any;
+      } satisfies RerankRow;
     });
 
     // 로그 출력
@@ -755,7 +791,7 @@ export async function POST(request: NextRequest) {
       userAge: effectiveUserAge,
     });
 
-    const merged = mappedRows.sort(compareByFinalScoreDescThenIdAsc as any);
+    const merged = mappedRows.sort(compareByFinalScoreDescThenIdAsc);
 
     // 클라이언트 사이드 필터 적용 (구 RPC는 필터 인자 안 받으므로 여기서 처리)
     const filtered = applyResultFilters(
@@ -766,7 +802,7 @@ export async function POST(request: NextRequest) {
     ).slice(0, DEFAULT_MATCH_COUNT);
 
     return NextResponse.json({
-      results: filtered,
+      results: await attachScrapCounts(filtered),
       rpc_used: "basic_with_table",
       self_query: selfQuery,
       filter_conflicts: filterConflicts,

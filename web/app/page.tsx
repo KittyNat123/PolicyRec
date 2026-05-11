@@ -1,4 +1,4 @@
-// =====================================================================
+﻿// =====================================================================
 // PolicyRec 검색 화면 (Next.js MVP)
 // =====================================================================
 // - 자연어 검색 → /api/search → Gemini embedding → Supabase RPC
@@ -11,7 +11,10 @@
 
 import Image from "next/image";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AppHeader } from "@/components/AppHeader";
+import { AuthDialog } from "@/components/AuthDialog";
 import { PolicyCard } from "@/components/PolicyCard";
+import { ALL_OPTION, CATEGORIES, REGIONS, TARGET_OPTIONS } from "@/lib/profile-options";
 import { recruitmentStatus, type RecruitmentStatus } from "@/lib/utils";
 import type {
   ChatMessage,
@@ -21,45 +24,7 @@ import type {
   User,
 } from "@/lib/types";
 
-const ALL = "전체";
-
-// UI에서는 "전체" 하나만 보여줍니다. DB의 실제 값 "전국"은 검색 API/RPC에서 계속 사용합니다.
-const REGIONS: string[] = [
-  ALL,
-  "서울특별시",
-  "부산광역시",
-  "대구광역시",
-  "인천광역시",
-  "광주광역시",
-  "대전광역시",
-  "울산광역시",
-  "세종특별자치시",
-  "경기도",
-  "강원특별자치도",
-  "충청북도",
-  "충청남도",
-  "전북특별자치도",
-  "전라남도",
-  "경상북도",
-  "경상남도",
-  "제주특별자치도",
-];
-
-const CATEGORIES: string[] = [
-  ALL,
-  "창업",
-  "경영",
-  "기술",
-  "인력/일자리",
-  "판로/수출",
-  "자금",
-  "교육/멘토링",
-  "시설/공간",
-  "행사/네트워크",
-  "주거",
-  "복지/문화",
-  "기타",
-];
+const ALL = ALL_OPTION;
 
 const STATUSES: (RecruitmentStatus | typeof ALL)[] = [
   ALL,
@@ -69,9 +34,42 @@ const STATUSES: (RecruitmentStatus | typeof ALL)[] = [
   "상시",
 ];
 
-type AuthMode = "login" | "signup";
-type SortBy = "end_date_asc" | "start_date_desc" | "similarity_desc";
-type ServerSortBy = Exclude<SortBy, "similarity_desc">;
+const TARGET_AGE_PRESETS: Record<string, string> = {
+  청년: "25",
+  중장년: "45",
+  노인: "65",
+};
+
+const TARGET_SEARCH_TERMS: Record<string, string> = {
+  장애인: "장애인 대상 지원",
+  저소득: "저소득 취약계층 지원",
+  학생: "학생 대상 지원",
+  "예비 창업자": "예비창업자 지원",
+  재직자: "재직자 지원",
+  구직자: "구직자 취업 지원",
+  기업: "기업 지원 사업",
+};
+
+type SortBy = "end_date_asc" | "start_date_desc" | "similarity_desc" | "scrap_count_desc";
+type ServerSortBy = Exclude<SortBy, "similarity_desc" | "scrap_count_desc">;
+
+const CATEGORY_OPTIONS = [ALL, "주거", "창업", "취업", "교육", "복지", "금융", "문화"] as const;
+const CATEGORY_API_MAP: Record<string, string> = {
+  취업: "인력/일자리",
+  금융: "자금",
+};
+const REGION_OPTIONS = [
+  ALL,
+  "서울특별시",
+  "경기도",
+  "인천광역시",
+  "부산광역시",
+  "대구광역시",
+  "광주광역시",
+  "대전광역시",
+  "울산광역시",
+  "세종특별자치시",
+] as const;
 
 function parseTargetAge(value: string): number | null {
   if (!value.trim()) return null;
@@ -82,12 +80,14 @@ function parseTargetAge(value: string): number | null {
 
 function savedRegionToUi(region: string | undefined): string {
   if (!region || region === "전국") return ALL;
-  return REGIONS.includes(region) ? region : ALL;
+  return (REGIONS as readonly string[]).includes(region) ? region : ALL;
 }
 
 function savedCategoryToUi(category: string | undefined): string {
   if (!category) return ALL;
-  return CATEGORIES.includes(category) ? category : ALL;
+  if (category === "인력/일자리") return "취업";
+  if (category === "자금") return "금융";
+  return (CATEGORIES as readonly string[]).includes(category) ? category : ALL;
 }
 
 async function readApiError(response: Response, fallback: string) {
@@ -117,6 +117,18 @@ function collectChatAnnIds(messages: ChatMessage[]): number[] {
     )
   );
 }
+
+function isLowSignalChatInput(value: string) {
+  const normalized = value.trim().replace(/\s+/g, "");
+  if (normalized.length < 2) return true;
+  if (!/[0-9A-Za-z가-힣]/.test(normalized)) return true;
+  if (/^[ㅋㅎㅠㅜㅗㅓㅏㅣㅡㄱ-ㅎㅏ-ㅣ!?.,~]+$/.test(normalized)) return true;
+  if (/^(.)\1{2,}$/.test(normalized)) return true;
+  return false;
+}
+
+const CHAT_INPUT_GUIDE =
+  "원하시는 정책을 검색해보세요!\n예: 서울 거주 25살 예비창업자 자금 지원, 청년 주거 지원, 구직자 교육 지원";
 
 function buildChatTranscript(messages: ChatMessage[]): string {
   return messages
@@ -159,6 +171,8 @@ function sortResultsClientSide(
   const copy = [...results];
   if (sortBy === "similarity_desc") {
     copy.sort((a, b) => b.similarity - a.similarity);
+  } else if (sortBy === "scrap_count_desc") {
+    copy.sort((a, b) => (b.scrap_count ?? 0) - (a.scrap_count ?? 0));
   } else if (sortBy === "end_date_asc") {
     // 마감 임박순: apply_end_dt 오름차순. null/빈값은 뒤로
     copy.sort((a, b) => {
@@ -182,41 +196,37 @@ function sortResultsClientSide(
 }
 
 function toServerSortBy(sortBy: SortBy): ServerSortBy {
-  return sortBy === "similarity_desc" ? "end_date_asc" : sortBy;
+  return sortBy === "similarity_desc" || sortBy === "scrap_count_desc"
+    ? "end_date_asc"
+    : sortBy;
 }
 
 const SORT_LABELS: Record<SortBy, string> = {
   end_date_asc: "마감 가까운 순",
   start_date_desc: "새로 올라온 순",
   similarity_desc: "유사도 순",
+  scrap_count_desc: "스크랩 많은 순",
 };
 
 const SORT_DESCRIPTIONS: Record<SortBy, string> = {
   end_date_asc: "신청 마감이 빠른 정책부터 보여드려요.",
   start_date_desc: "최근 등록된 정책부터 보여드려요.",
   similarity_desc: "나와 더 잘 맞는 정책부터 보여드려요.",
+  scrap_count_desc: "현재 불러온 결과 안에서 스크랩이 많은 정책부터 보여드려요.",
 };
 
 export default function Home() {
   const [query, setQuery] = useState("");
-  const [filterCategory, setFilterCategory] = useState<string>(ALL);
-  const [filterRegion, setFilterRegion] = useState<string>(ALL);
+  const [filterCategories, setFilterCategories] = useState<string[]>([ALL]);
+  const [filterRegion, setFilterRegion] = useState<string[]>([ALL]);
+  const [filterTargets, setFilterTargets] = useState<string[]>([ALL]);
   const [filterAge, setFilterAge] = useState("");
-  const [filterStatus, setFilterStatus] = useState<RecruitmentStatus | typeof ALL>(
-    ALL
-  );
+  const [filterStatus, setFilterStatus] = useState<string[]>([ALL]);
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searched, setSearched] = useState(false);
 
-  const [authMode, setAuthMode] = useState<AuthMode>("login");
-  const [loginId, setLoginId] = useState("");
-  const [password, setPassword] = useState("");
-  const [signupRegion, setSignupRegion] = useState<string>(ALL);
-  const [signupCategory, setSignupCategory] = useState<string>(ALL);
-  const [signupAge, setSignupAge] = useState("");
-  const [signupUserType, setSignupUserType] = useState("선택 안함");
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [savedFilter, setSavedFilter] = useState<SavedFilter | null>(null);
   const [scrappedIds, setScrappedIds] = useState<Set<number>>(new Set());
@@ -227,9 +237,12 @@ export default function Home() {
   const [activeChatId, setActiveChatId] = useState<number | null>(null);
   const [savedChatsLoading, setSavedChatsLoading] = useState(false);
   const [savedChatsSetupRequired, setSavedChatsSetupRequired] = useState(false);
-  const [authMessage, setAuthMessage] = useState<string | null>(null);
+  const [uiMessage, setUiMessage] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [authLoading, setAuthLoading] = useState(false);
+  const [authDialogOpen, setAuthDialogOpen] = useState(false);
+  const [authDialogMode, setAuthDialogMode] = useState<"login" | "signup">("login");
+  const [recommendPrompt, setRecommendPrompt] = useState<"profile" | "scrap" | null>(null);
+  const [highlightFilter, setHighlightFilter] = useState(false);
 
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
@@ -237,6 +250,9 @@ export default function Home() {
   const [chatError, setChatError] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const chatAbortRef = useRef<AbortController | null>(null);
+  const autoSaveTimerRef = useRef<number | null>(null);
+  const lastSavedTranscriptRef = useRef("");
+  const autoFilterReadyRef = useRef(false);
   // 이탈 확인 팝업 — 어떤 액션을 확인 중인지 함께 기억
   // null = 팝업 닫힘 / "new" = 새 채팅 / "logout" = 로그아웃 / restore = 저장 대화 복원
   type LeaveAction = "new" | "logout" | { type: "restore"; chat: SavedChat };
@@ -288,7 +304,7 @@ export default function Home() {
     } catch (e) {
       setSavedChats([]);
       setSavedChatsSetupRequired(false);
-      setAuthMessage(
+      setUiMessage(
         e instanceof Error ? e.message : "저장 답변을 불러오지 못했어요."
       );
     } finally {
@@ -310,7 +326,7 @@ export default function Home() {
       setSavedChatsSetupRequired(false);
     }
     if (data.filter_error) {
-      setAuthMessage(`필터 조회 오류: ${data.filter_error}`);
+      setUiMessage(`필터 조회 오류: ${data.filter_error}`);
     }
   }, [loadSavedChats, loadScraps]);
 
@@ -370,10 +386,23 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!autoFilterReadyRef.current) {
+      autoFilterReadyRef.current = true;
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void handleSearch();
+    }, 350);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterCategories, filterRegion, filterTargets, filterAge, filterStatus, showClosed]);
+
   function handleSortChange(next: SortBy) {
     if (next === sortBy) return;
     setSortBy(next);
-    if (next === "similarity_desc") {
+    if (next === "similarity_desc" || next === "scrap_count_desc") {
       if (!searched || lastSearchQuery === "") return;
       setResults((prev) => sortResultsClientSide(prev, next));
       return;
@@ -410,68 +439,7 @@ export default function Home() {
     }, 2500);
   }
 
-  async function handleAuthSubmit() {
-    setAuthLoading(true);
-    setAuthMessage(null);
-    try {
-      let payload: Record<string, unknown> = { login_id: loginId, password };
-      if (authMode === "signup") {
-        const targetAge = parseTargetAge(signupAge);
-        if (signupAge.trim() && targetAge === null) {
-          setAuthMessage("나이는 0~120 사이의 숫자로 입력해주세요.");
-          setAuthLoading(false);
-          return;
-        }
-        payload = { ...payload, region: signupRegion, category: signupCategory, target_age: targetAge, user_type: signupUserType };
-      }
-      const res = await fetch(`/api/auth/${authMode}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        throw new Error(
-          await readApiError(
-            res,
-            authMode === "login" ? "로그인에 실패했어요." : "회원가입에 실패했어요."
-          )
-        );
-      }
-      const data = await res.json();
-      setCurrentUser(data.user);
-      setPassword("");
-      if (authMode === "signup") {
-        setSignupRegion(ALL);
-        setSignupCategory(ALL);
-        setSignupAge("");
-        setSignupUserType("선택 안함");
-        setAuthMode("login");
-      }
-      setAuthMessage(authMode === "login" ? "로그인했습니다." : "회원가입했습니다.");
-      // 로그인/회원가입 시 챗봇 초기화 (이전 비로그인 컨텍스트 답변 비우기)
-      setChatMessages([]);
-      setChatInput("");
-      setChatError(null);
-      setActiveChatId(null);
-      await loadSession();
-    } catch (e) {
-      setAuthMessage(e instanceof Error ? e.message : "인증 오류가 발생했어요.");
-    } finally {
-      setAuthLoading(false);
-    }
-  }
-
-  async function handleLogout() {
-    // 진행 중인 대화가 있으면 이탈 확인 팝업 먼저 표시
-    if (chatMessages.length > 0) {
-      setLeaveAction("logout");
-      return;
-    }
-    await doLogout();
-  }
-
-  async function doLogout() {
-    await fetch("/api/auth/logout", { method: "POST" });
+  async function clearSessionState(message?: string) {
     if (chatAbortRef.current) {
       chatAbortRef.current.abort();
       chatAbortRef.current = null;
@@ -484,16 +452,17 @@ export default function Home() {
     setSavedChatsSetupRequired(false);
     setShowScrappedOnly(false);
     setQuery("");
-    setFilterCategory(ALL);
-    setFilterRegion(ALL);
+    setFilterCategories([ALL]);
+    setFilterRegion([ALL]);
+    setFilterTargets([ALL]);
     setFilterAge("");
-    setFilterStatus(ALL);
+    setFilterStatus([ALL]);
     setShowClosed(false);
     setSearched(false);
     setLastSearchQuery("");
     setSortBy("end_date_asc");
     setError(null);
-    setAuthMessage("로그아웃했습니다.");
+    setUiMessage(message ?? null);
     // 챗봇 상태 초기화 (로그인 사용자 컨텍스트로 받았던 답변 비우기)
     setChatMessages([]);
     setChatInput("");
@@ -505,9 +474,65 @@ export default function Home() {
     await loadOpenAnnouncements(0, "end_date_asc", false);
   }
 
+  function openAuthDialog(mode: "login" | "signup") {
+    setAuthDialogMode(mode);
+    setAuthDialogOpen(true);
+  }
+
+  function openChatWithPrompt(prompt: string) {
+    setChatOpen(true);
+    setChatInput(prompt);
+  }
+
+  function hasSavedProfile() {
+    return Boolean(
+      savedFilter?.user_type ||
+        savedFilter?.regions?.length ||
+        savedFilter?.categories?.length ||
+        typeof savedFilter?.target_age === "number"
+    );
+  }
+
+  function requestProfileRecommendation() {
+    if (!currentUser) {
+      openAuthDialog("signup");
+      return;
+    }
+    if (!hasSavedProfile()) {
+      setRecommendPrompt("profile");
+      return;
+    }
+    openChatWithPrompt("내 저장 정보와 스크랩 이력을 바탕으로 지금 신청할 만한 정책을 추천해줘.");
+  }
+
+  function requestScrapRecommendation() {
+    if (!currentUser) {
+      openAuthDialog("signup");
+      return;
+    }
+    if (scrappedIds.size === 0) {
+      setRecommendPrompt("scrap");
+      return;
+    }
+    openChatWithPrompt("내가 스크랩한 정책과 비슷한 정책 중 지금 신청 가능한 공고를 추천해줘.");
+  }
+
+  async function handleHeaderAuthChange(action: "login" | "signup" | "logout") {
+    if (action === "logout") {
+      await clearSessionState("로그아웃했습니다.");
+      return;
+    }
+    setUiMessage(action === "login" ? "로그인했습니다." : "회원가입했습니다.");
+    setChatMessages([]);
+    setChatInput("");
+    setChatError(null);
+    setActiveChatId(null);
+    await loadSession();
+  }
+
   async function toggleScrap(annId: number) {
     if (!currentUser) {
-      setAuthMessage("스크랩하려면 먼저 로그인해주세요.");
+      setUiMessage("스크랩하려면 먼저 로그인해주세요.");
       return;
     }
 
@@ -519,7 +544,7 @@ export default function Home() {
     });
 
     if (!res.ok) {
-      setAuthMessage(await readApiError(res, "스크랩 처리에 실패했어요."));
+      setUiMessage(await readApiError(res, "스크랩 처리에 실패했어요."));
       return;
     }
 
@@ -535,12 +560,12 @@ export default function Home() {
     if (isScrapped) {
       setScrappedItems((prev) => prev.filter((item) => item.id !== annId));
     }
-    setAuthMessage(isScrapped ? "스크랩을 해제했습니다." : "스크랩했습니다.");
+    setUiMessage(isScrapped ? "스크랩을 해제했습니다." : "스크랩했습니다.");
   }
 
   async function saveCurrentChat(silent = false): Promise<boolean> {
     if (!currentUser) {
-      setAuthMessage("로그인하면 저장 가능해요.");
+      setUiMessage("로그인하면 저장 가능해요.");
       return false;
     }
     if (chatMessages.length === 0) {
@@ -572,7 +597,7 @@ export default function Home() {
       if (res.status === 503) {
         setSavedChatsSetupRequired(true);
       }
-      setAuthMessage(message);
+      setUiMessage(message);
       // silent 모드(자동저장)에서는 실패 토스트도 생략 — 새 채팅 흐름을 방해하지 않기 위해
       if (!silent) showToast(message);
       return false;
@@ -587,14 +612,63 @@ export default function Home() {
           : [savedChat, ...prev]
       );
       setActiveChatId(savedChat.id);
+      lastSavedTranscriptRef.current = content;
     } else {
       await loadSavedChats();
     }
-    setAuthMessage("챗봇 대화를 저장했습니다.");
+    setUiMessage("챗봇 대화를 저장했습니다.");
     // silent 모드(자동저장)에서는 성공 토스트 생략 — 새 채팅 시작 토스트만 보이게
     if (!silent) showToast("챗봇 대화를 저장했습니다.");
     return true;
   }
+
+  useEffect(() => {
+    if (!currentUser || chatMessages.length === 0 || chatLoading) return;
+
+    const content = buildChatTranscript(chatMessages);
+    if (!content || lastSavedTranscriptRef.current === content) return;
+
+    if (autoSaveTimerRef.current) {
+      window.clearTimeout(autoSaveTimerRef.current);
+    }
+
+    autoSaveTimerRef.current = window.setTimeout(async () => {
+      const annIds = collectChatAnnIds(chatMessages);
+      const targetChatId = activeChatId;
+      const res = await fetch("/api/user/saved-chats", {
+        method: targetChatId ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: targetChatId,
+          content,
+          ann_ids: annIds,
+        }),
+      });
+
+      if (!res.ok) {
+        if (res.status === 503) setSavedChatsSetupRequired(true);
+        return;
+      }
+
+      const data = await res.json().catch(() => ({}));
+      if (data.saved_chat) {
+        const savedChat = data.saved_chat as SavedChat;
+        setSavedChats((prev) =>
+          targetChatId
+            ? prev.map((chat) => (chat.id === savedChat.id ? savedChat : chat))
+            : [savedChat, ...prev]
+        );
+        setActiveChatId(savedChat.id);
+        lastSavedTranscriptRef.current = content;
+      }
+    }, 900);
+
+    return () => {
+      if (autoSaveTimerRef.current) {
+        window.clearTimeout(autoSaveTimerRef.current);
+      }
+    };
+  }, [activeChatId, chatLoading, chatMessages, currentUser]);
 
   // "새 채팅 시작" 버튼 클릭 — 대화 내용이 있으면 무조건 확인 팝업 먼저
   function requestNewChat() {
@@ -619,7 +693,7 @@ export default function Home() {
     if (leaveAction === "new") {
       doStartNewChat();
     } else if (leaveAction === "logout") {
-      void doLogout();
+      void clearSessionState("로그아웃했습니다.");
     } else if (leaveAction && typeof leaveAction === "object" && leaveAction.type === "restore") {
       doRestoreChat(leaveAction.chat);
     }
@@ -648,6 +722,7 @@ export default function Home() {
     setChatInput("");
     setChatError(null);
     setActiveChatId(null);
+    lastSavedTranscriptRef.current = "";
     setLeaveAction(null);
     showToast("새 채팅을 시작했습니다.");
   }
@@ -665,6 +740,7 @@ export default function Home() {
     setChatInput("");
     setChatError(null);
     setActiveChatId(chat.id);
+    lastSavedTranscriptRef.current = chat.content;
     setLeaveAction(null);
     showToast(`"${chat.title ?? "저장된 대화"}"를 불러왔습니다.`);
   }
@@ -677,7 +753,7 @@ export default function Home() {
     });
 
     if (!res.ok) {
-      setAuthMessage(await readApiError(res, "저장 답변 삭제에 실패했어요."));
+      setUiMessage(await readApiError(res, "저장 답변 삭제에 실패했어요."));
       return;
     }
 
@@ -685,7 +761,7 @@ export default function Home() {
     if (activeChatId === id) {
       setActiveChatId(null);
     }
-    setAuthMessage("저장 답변을 삭제했습니다.");
+    setUiMessage("저장 답변을 삭제했습니다.");
     showToast("저장 답변을 삭제했습니다.");
   }
 
@@ -717,7 +793,7 @@ export default function Home() {
         }
       } catch (e) {
         if (!ignore) {
-          setAuthMessage(
+          setUiMessage(
             e instanceof Error ? e.message : "스크랩 공고를 불러오지 못했어요."
           );
           setScrappedItems([]);
@@ -736,10 +812,10 @@ export default function Home() {
   }, [currentUser, scrappedIds, showScrappedOnly]);
 
   async function saveCurrentFilter() {
-    setAuthMessage(null);
+    setUiMessage(null);
     const targetAge = parseTargetAge(filterAge);
     if (filterAge.trim() && targetAge === null) {
-      setAuthMessage("나이는 0~120 사이의 숫자로 입력해주세요.");
+      setUiMessage("나이는 0~120 사이의 숫자로 입력해주세요.");
       return;
     }
 
@@ -747,30 +823,34 @@ export default function Home() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        region: filterRegion,
-        category: filterCategory,
+        region: filterRegion.filter((value) => value !== ALL)[0] ?? ALL,
+        category:
+          CATEGORY_API_MAP[filterCategories.filter((value) => value !== ALL)[0] ?? ""] ??
+          filterCategories.filter((value) => value !== ALL)[0] ??
+          ALL,
         target_age: targetAge,
       }),
     });
 
     if (!res.ok) {
-      setAuthMessage(await readApiError(res, "필터 저장에 실패했어요."));
+      setUiMessage(await readApiError(res, "필터 저장에 실패했어요."));
       return;
     }
 
     const data = await res.json();
     setSavedFilter(data.filter);
-    setAuthMessage("현재 필터를 저장했습니다.");
+    setUiMessage("현재 필터를 저장했습니다.");
   }
 
-  function applySavedFilter() {
+function applySavedFilter() {
     if (!savedFilter) return;
-    setFilterRegion(savedRegionToUi(savedFilter.regions?.[0]));
-    setFilterCategory(savedCategoryToUi(savedFilter.categories?.[0]));
+    setFilterRegion([savedRegionToUi(savedFilter.regions?.[0])]);
+    setFilterCategories([savedCategoryToUi(savedFilter.categories?.[0])]);
+    setFilterTargets([ALL]);
     setFilterAge(
       typeof savedFilter.target_age === "number" ? String(savedFilter.target_age) : ""
     );
-    setAuthMessage("저장된 필터를 적용했습니다.");
+    setUiMessage("저장된 필터를 적용했습니다.");
   }
 
   async function handleSearch(options?: {
@@ -778,6 +858,24 @@ export default function Home() {
     appendOffset?: number; // 더보기용. 지정 시 append 모드
   }) {
     const trimmed = query.trim();
+    const selectedCategories = filterCategories.filter((value) => value !== ALL);
+    const selectedRegions = filterRegion.filter((value) => value !== ALL);
+    const selectedStatuses = filterStatus.filter((value) => value !== ALL);
+    const selectedTargets = filterTargets.filter((value) => value !== ALL);
+    const categorySearchTerm =
+      selectedCategories.length > 1 ? selectedCategories.join(" ") : "";
+    const regionSearchTerm = selectedRegions.length > 1 ? selectedRegions.join(" ") : "";
+    const targetSearchTerm = selectedTargets
+      .map((target) => TARGET_SEARCH_TERMS[target] ?? target)
+      .join(" ");
+    const hardFilterCategory =
+      selectedCategories.length === 1
+        ? CATEGORY_API_MAP[selectedCategories[0]] ?? selectedCategories[0]
+        : ALL;
+    const hardFilterRegion = selectedRegions.length === 1 ? selectedRegions[0] : ALL;
+    const effectiveQuery = [trimmed, categorySearchTerm, regionSearchTerm, targetSearchTerm]
+      .filter(Boolean)
+      .join(" ");
     const targetAge = parseTargetAge(filterAge);
 
     const isAppend = options?.appendOffset !== undefined;
@@ -787,7 +885,7 @@ export default function Home() {
     // 검색어 없는 필터-only 조회에서 기본은 마감 제외 결과를 요청한다.
     // (마감 포함 조회를 원하는 경우: 모집상태=마감 또는 showClosed=true)
     const includeOnlyOpen =
-      trimmed === "" && filterStatus !== "마감" && !showClosed;
+      effectiveQuery === "" && !selectedStatuses.includes("마감") && !showClosed;
     if (filterAge.trim() && targetAge === null) {
       setError("나이는 0~120 사이의 숫자로 입력해주세요.");
       return;
@@ -803,14 +901,14 @@ export default function Home() {
     try {
       const res = await fetch("/api/search", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query: trimmed,
-          filter_category: filterCategory,
-          filter_region: filterRegion,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+          query: effectiveQuery,
+          filter_category: hardFilterCategory,
+          filter_region: hardFilterRegion,
           user_age: targetAge,
           // 검색어 없을 때만 정렬/페이지네이션 적용 (키워드 검색은 similarity 정렬 + 10개 고정)
-          ...(trimmed === "" && {
+          ...(effectiveQuery === "" && {
             sort_by: effectiveSortBy,
             offset: effectiveOffset,
             limit: PAGE_SIZE,
@@ -827,10 +925,10 @@ export default function Home() {
         setResults((prev) => [...prev, ...newResults]);
       } else {
         setResults(newResults);
-        setLastSearchQuery(trimmed);
+        setLastSearchQuery(effectiveQuery);
       }
       // 검색어 없을 때만 페이지네이션 상태 업데이트
-      if (trimmed === "") {
+      if (effectiveQuery === "") {
         setBrowseHasMore(Boolean(data.hasMore));
         setBrowseOffset(effectiveOffset + newResults.length);
         if (!isAppend) setSortBy(options?.sortOverride ?? effectiveSortBy);
@@ -849,10 +947,11 @@ export default function Home() {
 
   function handleResetFilters() {
     setQuery("");
-    setFilterCategory(ALL);
-    setFilterRegion(ALL);
+    setFilterCategories([ALL]);
+    setFilterRegion([ALL]);
+    setFilterTargets([ALL]);
     setFilterAge("");
-    setFilterStatus(ALL);
+    setFilterStatus([ALL]);
     setError(null);
     setLastSearchQuery("");
     setSortBy("end_date_asc");
@@ -864,6 +963,14 @@ export default function Home() {
   async function handleChatSend() {
     const trimmed = chatInput.trim();
     if (!trimmed || chatLoading) return;
+
+    if (isLowSignalChatInput(trimmed)) {
+      const guideMessage: ChatMessage = { role: "assistant", content: CHAT_INPUT_GUIDE };
+      setChatMessages((prev) => [...prev, guideMessage]);
+      setChatInput("");
+      setChatError(null);
+      return;
+    }
 
     // 이전 요청이 남아있으면 취소
     if (chatAbortRef.current) {
@@ -929,183 +1036,205 @@ export default function Home() {
   }
 
   const statusFilteredResults =
-    filterStatus === ALL
+    filterStatus.includes(ALL)
       ? showClosed
         ? results
         : results.filter(
           (r) =>
             recruitmentStatus(r.apply_start_dt, r.apply_end_dt) !== "마감"
         )
-      : results.filter(
-        (r) =>
-          recruitmentStatus(r.apply_start_dt, r.apply_end_dt) ===
-          filterStatus
-      );
+      : results.filter((r) => filterStatus.includes(recruitmentStatus(r.apply_start_dt, r.apply_end_dt)));
 
   // 스크랩만 보기 모드에서는 "마감 제외" 기본 동작을 우회한다.
   // 자기가 스크랩한 정책은 마감 여부 상관없이 보여주는 게 자연스럽기 때문.
   // 단, 사용자가 모집상태 dropdown을 명시 선택했으면 그 필터는 적용한다.
   const visibleResults =
     showScrappedOnly && currentUser
-      ? (filterStatus === ALL
+      ? (filterStatus.includes(ALL)
         ? scrappedIds.size === 0
           ? []
           : scrappedItems
-        : (scrappedIds.size === 0 ? [] : scrappedItems).filter(
-          (r) =>
-            recruitmentStatus(r.apply_start_dt, r.apply_end_dt) ===
-            filterStatus
-        )
+        : (scrappedIds.size === 0 ? [] : scrappedItems).filter((r) => filterStatus.includes(recruitmentStatus(r.apply_start_dt, r.apply_end_dt)))
       )
       : statusFilteredResults;
 
-  const activeFilterChips = [
-    filterCategory !== ALL
-      ? { key: "category", label: "카테고리", value: filterCategory }
-      : null,
-    filterRegion !== ALL
-      ? { key: "region", label: "지역", value: filterRegion }
-      : null,
-    filterAge.trim()
-      ? { key: "age", label: "나이", value: `${filterAge.trim()}세` }
-      : null,
-    filterStatus !== ALL
-      ? { key: "status", label: "모집상태", value: filterStatus }
-      : null,
-    showClosed
-      ? { key: "closed", label: "마감 공고", value: "포함" }
-      : null,
-    showScrappedOnly && currentUser
-      ? { key: "scrap", label: "보기", value: "스크랩만" }
-      : null,
-  ].filter((chip): chip is { key: string; label: string; value: string } =>
-    Boolean(chip)
-  );
-  const hasActiveFilters = activeFilterChips.length > 0;
   const resultHeading = showScrappedOnly && currentUser
     ? "스크랩한 공고"
     : searched
       ? "검색 결과"
       : "지금 신청 가능한 정책";
-  const resultCountLabel = `${visibleResults.length.toLocaleString("ko-KR")}건`;
   const isInitialLoading = !searched && browseLoading && results.length === 0;
   const isAdmin = currentUser?.role === "admin";
   const canSortBySimilarity = searched && lastSearchQuery !== "";
   return (
-    <div className="min-h-screen bg-zinc-50 text-zinc-950 dark:bg-black dark:text-zinc-50">
-      <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-10">
-        <header className="mb-6 flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-          <div className="max-w-2xl">
-            <p className="mb-2 text-xs font-semibold uppercase text-blue-700 dark:text-blue-300">
-              통합 정책 검색
-            </p>
-            <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
-              PolicyRec
-            </h1>
-            <p className="mt-3 text-sm leading-6 text-zinc-600 dark:text-zinc-300 sm:text-base">
-              키워드와 조건을 함께 보고, 지금 지원 가능한 정책부터 빠르게 확인하세요.
-            </p>
-          </div>
-          <AuthPanel
-            authMode={authMode}
-            setAuthMode={setAuthMode}
-            loginId={loginId}
-            setLoginId={setLoginId}
-            password={password}
-            setPassword={setPassword}
-            signupRegion={signupRegion}
-            setSignupRegion={setSignupRegion}
-            signupCategory={signupCategory}
-            setSignupCategory={setSignupCategory}
-            signupAge={signupAge}
-            setSignupAge={setSignupAge}
-            signupUserType={signupUserType}
-            setSignupUserType={setSignupUserType}
-            currentUser={currentUser}
-            authLoading={authLoading}
-            authMessage={authMessage}
-            savedFilter={savedFilter}
-            onSubmit={handleAuthSubmit}
-            onLogout={handleLogout}
-            onSaveFilter={saveCurrentFilter}
-            onApplyFilter={applySavedFilter}
-            scrapCount={scrappedIds.size}
-            showScrappedOnly={showScrappedOnly}
-            onToggleScrappedOnly={() => {
-              setShowScrappedOnly((value) => {
-                const next = !value;
-                if (next) setSearched(true);
-                return next;
-              });
-            }}
-          />
-        </header>
-
-        <section className="mb-6 rounded-lg border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 sm:p-5">
-          <div className="flex flex-col gap-3 lg:flex-row">
-            <label className="min-w-0 flex-1">
-              <span className="mb-1.5 block text-xs font-semibold text-zinc-600 dark:text-zinc-300">
-                검색어
-              </span>
-              <input
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleSearch();
-                }}
-                placeholder="예: 25살 청년 창업 지원, 서울 주거 정책"
-                className="w-full rounded-lg border border-zinc-300 bg-white px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
-              />
-            </label>
+    <div className="min-h-screen bg-slate-50 text-slate-950">
+      <AppHeader currentUser={currentUser} onAuthChange={handleHeaderAuthChange} />
+      <main className="mx-auto max-w-[1280px] px-4 py-6 sm:px-6">
+        <section className="mb-6 overflow-hidden rounded-[24px] bg-gradient-to-br from-blue-600 to-blue-800 px-5 py-10 text-center text-white shadow-sm sm:px-8 sm:py-12">
+          <h1 className="text-2xl font-bold sm:text-3xl">나에게 맞는 정책을 찾아보세요</h1>
+          <p className="mt-3 text-sm text-blue-100">전국 정책을 한 곳에서 탐색하고 스크랩하세요</p>
+          <div className="mx-auto mt-7 flex max-w-2xl items-center gap-2 rounded-2xl bg-white p-2 shadow-lg">
+            <span className="pl-3 text-slate-400">⌕</span>
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleSearch();
+              }}
+              placeholder="정책명, 키워드, 기관명으로 검색하세요"
+              className="min-w-0 flex-1 bg-transparent px-2 py-2.5 text-left text-sm text-slate-900 outline-none placeholder:text-slate-400"
+            />
             <button
               type="button"
               onClick={() => handleSearch()}
               disabled={loading}
-              className="rounded-lg bg-blue-700 px-6 py-3 font-semibold text-white transition-colors hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-400 dark:focus:ring-offset-zinc-950 lg:self-end"
+              className="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {loading ? "찾는 중..." : "정책 찾기"}
+              {loading ? "검색중" : "검색"}
             </button>
           </div>
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-2 text-xs">
+            <span className="font-semibold text-blue-100">인기 검색어:</span>
+            {["청년 월세 지원", "창업 지원금", "취업 수당", "문화누리카드"].map((keyword) => (
+              <button
+                key={keyword}
+                type="button"
+                onClick={() => setQuery(keyword)}
+                className="rounded-full bg-white/15 px-3 py-1.5 font-semibold text-white hover:bg-white/25"
+              >
+                {keyword}
+              </button>
+            ))}
+          </div>
+        </section>
 
-          <div className="mt-5 border-t border-zinc-100 pt-4 dark:border-zinc-800">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <section className="mb-6 grid gap-5 lg:grid-cols-[1.35fr_0.95fr]">
+          <div className="overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm">
+            <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                  필터
+                <p className="text-sm font-bold text-blue-600">오늘의 AI 추천</p>
+                <h2 className="mt-2 text-xl font-bold text-slate-950">
+                  내 조건에 맞는 정책을 먼저 골라볼까요?
                 </h2>
-                <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                  조건을 바꾼 뒤 정책 찾기를 누르면 결과가 갱신됩니다.
+                <p className="mt-2 max-w-xl text-sm leading-6 text-slate-600">
+                  지역, 나이, 관심 분야와 스크랩 이력을 바탕으로 지금 확인할 만한 공고를 좁혀드립니다.
                 </p>
               </div>
-              <span
-                className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                  hasActiveFilters
-                    ? "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200"
-                    : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
-                }`}
+              {currentUser ? (
+                <button
+                  type="button"
+                  onClick={requestProfileRecommendation}
+                  className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-blue-700"
+                >
+                  AI에게 추천받기
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => openAuthDialog("signup")}
+                  className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-blue-700"
+                >
+                  나만의 맞춤 정보 받기
+                </button>
+              )}
+            </div>
+            <div className="grid gap-3 border-t border-slate-100 bg-slate-50/70 p-4 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={requestProfileRecommendation}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50"
               >
-                {hasActiveFilters ? "조건 적용 중" : "전체 조건"}
-              </span>
+                내 조건 기반
+              </button>
+              <button
+                type="button"
+                onClick={requestScrapRecommendation}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50"
+              >
+                스크랩 취향 반영
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p className="text-sm font-bold text-slate-950">10초 컷 추천</p>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              정책을 고를 때 더 중요한 기준을 하나만 골라보세요.
+            </p>
+            <div className="mt-4 grid gap-2">
+              <button
+                type="button"
+                onClick={requestProfileRecommendation}
+                className="rounded-xl border border-slate-200 px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50"
+              >
+                내 조건에 맞는 정책이 좋아요
+              </button>
+              <button
+                type="button"
+                onClick={requestScrapRecommendation}
+                className="rounded-xl border border-slate-200 px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50"
+              >
+                내가 저장한 정책과 비슷하면 좋아요
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
+          <aside
+            className={`h-fit rounded-lg border bg-white shadow-sm transition ${
+              highlightFilter
+                ? "border-blue-400 ring-4 ring-blue-100"
+                : "border-slate-200"
+            }`}
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 px-4 py-4">
+              <h2 className="text-base font-bold text-slate-950">필터</h2>
+              <button type="button" onClick={handleResetFilters} className="text-xs font-bold text-slate-400 hover:text-blue-700">
+                초기화
+              </button>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <FilterSelect
-                label="카테고리"
-                value={filterCategory}
-                onChange={setFilterCategory}
-                options={CATEGORIES}
+            <div className="space-y-5 p-4">
+              <MultiChipFilter
+                label="분야"
+                values={filterCategories}
+                options={CATEGORY_OPTIONS}
+                onChange={setFilterCategories}
               />
-              <FilterSelect
+              <div>
+                <p className="mb-3 text-sm font-bold text-slate-700">대상</p>
+                <div className="flex flex-wrap gap-2">
+                  <MultiChipFilter
+                    label=""
+                    values={filterTargets}
+                    options={TARGET_OPTIONS}
+                    onChange={(values) => {
+                      setFilterTargets(values);
+                      const ageTargets = values.filter((value) => TARGET_AGE_PRESETS[value]);
+                      if (ageTargets.length === 1) {
+                        setFilterAge(TARGET_AGE_PRESETS[ageTargets[0]]);
+                      }
+                    }}
+                    hideLabel
+                  />
+                </div>
+              </div>
+              <MultiChipFilter
                 label="지역"
-                value={filterRegion}
+                values={filterRegion}
+                options={REGION_OPTIONS}
                 onChange={setFilterRegion}
-                options={REGIONS}
               />
-              <label className="flex flex-col gap-1.5 text-sm">
-                <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                  나이
-                </span>
+              <MultiChipFilter
+                label="상태"
+                values={filterStatus}
+                options={STATUSES as readonly string[]}
+                onChange={setFilterStatus}
+              />
+              <label className="block">
+                <span className="mb-2 block text-sm font-bold text-slate-700">나이</span>
                 <input
                   type="number"
                   min={0}
@@ -1113,73 +1242,73 @@ export default function Home() {
                   value={filterAge}
                   onChange={(e) => setFilterAge(e.target.value)}
                   placeholder="예: 25"
-                  className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </label>
-              <FilterSelect
-                label="모집상태"
-                value={filterStatus}
-                onChange={(v) =>
-                  setFilterStatus(v as RecruitmentStatus | typeof ALL)
-                }
-                options={STATUSES as readonly string[]}
-              />
-            </div>
-
-            <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              <div className="flex min-h-9 flex-wrap items-center gap-2">
-                {hasActiveFilters ? (
-                  activeFilterChips.map((chip) => (
-                    <button
-                      key={chip.key}
-                      type="button"
-                      aria-label={`${chip.label} ${chip.value} 조건 해제`}
-                      onClick={() => {
-                        if (chip.key === "category") setFilterCategory(ALL);
-                        if (chip.key === "region") setFilterRegion(ALL);
-                        if (chip.key === "age") setFilterAge("");
-                        if (chip.key === "status") setFilterStatus(ALL);
-                        if (chip.key === "closed") setShowClosed(false);
-                        if (chip.key === "scrap") setShowScrappedOnly(false);
-                      }}
-                      className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-800 transition-colors hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200 dark:hover:bg-blue-900/70"
-                    >
-                      <span className="text-blue-500 dark:text-blue-300">
-                        {chip.label}
-                      </span>
-                      {chip.value}
-                      <span aria-hidden="true" className="text-sm leading-none">
-                        ×
-                      </span>
-                    </button>
-                  ))
-                ) : (
-                  <span className="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
-                    전체 카테고리 · 전체 지역 · 나이 제한 없음
-                  </span>
-                )}
-              </div>
-              <div className="flex flex-wrap items-center gap-3">
-                <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300">
+              <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-slate-600">
                   <input
                     type="checkbox"
                     checked={showClosed}
                     onChange={(e) => setShowClosed(e.target.checked)}
-                    className="h-4 w-4 cursor-pointer rounded border-zinc-300 text-blue-600 focus:ring-blue-500 dark:border-zinc-600 dark:bg-zinc-800"
+                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                   />
                   마감 공고 포함
                 </label>
-                <button
-                  type="button"
-                  onClick={handleResetFilters}
-                  className="rounded-md border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-600 transition-colors hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                >
-                  전체 초기화
-                </button>
+
+              <div className="border-t border-slate-100 pt-5">
+                {currentUser && (
+                  <div className="grid gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void saveCurrentFilter()}
+                      className="rounded-xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+                    >
+                      현재 필터 저장
+                    </button>
+                    <button
+                      type="button"
+                      onClick={applySavedFilter}
+                      disabled={!savedFilter}
+                      className="rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      저장 필터 적용
+                    </button>
+                  </div>
+                )}
+
+                <div className="mt-3 rounded-2xl bg-slate-50 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm font-semibold text-slate-700">
+                      스크랩 {scrappedIds.size}개
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowScrappedOnly((value) => {
+                          const next = !value;
+                          if (next) setSearched(true);
+                          return next;
+                        });
+                      }}
+                      disabled={!showScrappedOnly && scrappedIds.size === 0}
+                      className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                        showScrappedOnly
+                          ? "border-amber-300 bg-amber-100 text-amber-800"
+                          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
+                      }`}
+                    >
+                      {showScrappedOnly ? "전체 결과 보기" : "스크랩만 보기"}
+                    </button>
+                  </div>
+                  {uiMessage && (
+                    <p className="mt-3 text-xs leading-5 text-slate-500">{uiMessage}</p>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        </section>
+          </aside>
+
+          <section className="min-w-0">
 
         {error && (
           <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
@@ -1197,9 +1326,6 @@ export default function Home() {
                   <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
                     {resultHeading}
                   </h2>
-                  <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
-                    {resultCountLabel}
-                  </span>
                 </div>
               </div>
               {!showScrappedOnly && results.length > 0 && (
@@ -1208,8 +1334,8 @@ export default function Home() {
                     정렬
                   </span>
                   <div className="flex flex-wrap items-center gap-1 rounded-lg border border-zinc-200 bg-zinc-50 p-1 text-sm dark:border-zinc-700 dark:bg-zinc-900">
-                    {canSortBySimilarity && (
-                      <button
+                  {canSortBySimilarity && (
+                    <button
                         type="button"
                         aria-pressed={sortBy === "similarity_desc"}
                         title={SORT_DESCRIPTIONS.similarity_desc}
@@ -1222,6 +1348,18 @@ export default function Home() {
                         {SORT_LABELS.similarity_desc}
                       </button>
                     )}
+                    <button
+                      type="button"
+                      aria-pressed={sortBy === "scrap_count_desc"}
+                      title={SORT_DESCRIPTIONS.scrap_count_desc}
+                      onClick={() => handleSortChange("scrap_count_desc")}
+                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors sm:text-sm ${sortBy === "scrap_count_desc"
+                        ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                        : "text-zinc-600 hover:bg-white dark:text-zinc-300 dark:hover:bg-zinc-800"
+                        }`}
+                    >
+                      {SORT_LABELS.scrap_count_desc}
+                    </button>
                     <button
                       type="button"
                       aria-pressed={sortBy === "end_date_asc"}
@@ -1328,6 +1466,8 @@ export default function Home() {
           </div>
         )}
 
+          </section>
+        </div>
       </main>
 
       {toastMessage && (
@@ -1336,6 +1476,61 @@ export default function Home() {
           className="fixed left-1/2 top-5 z-[60] -translate-x-1/2 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white shadow-lg dark:bg-zinc-100 dark:text-zinc-900"
         >
           {toastMessage}
+        </div>
+      )}
+
+      {authDialogOpen && (
+        <AuthDialog
+          key={authDialogMode}
+          open={authDialogOpen}
+          initialMode={authDialogMode}
+          onClose={() => setAuthDialogOpen(false)}
+          onSuccess={handleHeaderAuthChange}
+        />
+      )}
+
+      {recommendPrompt && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-[75] flex items-center justify-center bg-slate-950/45 px-4"
+        >
+          <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl">
+            <h3 className="text-base font-bold text-slate-950">
+              {recommendPrompt === "profile"
+                ? "맞춤 조건을 먼저 설정할까요?"
+                : "스크랩 취향을 먼저 만들어볼까요?"}
+            </h3>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              {recommendPrompt === "profile"
+                ? "마이페이지에서 지역, 나이, 사용자 유형, 관심 분야를 저장하면 AI 추천이 더 정확해집니다."
+                : "관심 있는 정책을 스크랩해두면 비슷한 공고를 더 잘 찾아드릴 수 있습니다."}
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setRecommendPrompt(null)}
+                className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                아니요
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (recommendPrompt === "profile") {
+                    window.location.href = "/mypage";
+                    return;
+                  }
+                  setRecommendPrompt(null);
+                  setHighlightFilter(true);
+                  window.setTimeout(() => setHighlightFilter(false), 1800);
+                }}
+                className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+              >
+                예
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1443,6 +1638,59 @@ export default function Home() {
   );
 }
 
+function toggleMultiValue(current: string[], option: string, options: readonly string[]) {
+  if (option === ALL) return [ALL];
+  const withoutAll = current.filter((value) => value !== ALL);
+  const next = withoutAll.includes(option)
+    ? withoutAll.filter((value) => value !== option)
+    : [...withoutAll, option];
+  const selectableOptions = options.filter((value) => value !== ALL);
+  if (selectableOptions.length > 0 && selectableOptions.every((value) => next.includes(value))) {
+    return [ALL];
+  }
+  return next.length === 0 ? [ALL] : next;
+}
+
+function MultiChipFilter({
+  label,
+  values,
+  options,
+  onChange,
+  hideLabel = false,
+}: {
+  label: string;
+  values: readonly string[];
+  options: readonly string[];
+  onChange: (values: string[]) => void;
+  hideLabel?: boolean;
+}) {
+  const normalizedValues = values.length > 0 ? values : [ALL];
+  return (
+    <div>
+      {!hideLabel && <p className="mb-3 text-sm font-bold text-slate-700">{label}</p>}
+      <div className="flex flex-wrap gap-2">
+        {options.map((option) => {
+          const active = normalizedValues.includes(option);
+          return (
+            <button
+              key={option}
+              type="button"
+              onClick={() => onChange(toggleMultiValue([...normalizedValues], option, options))}
+              className={`rounded-full border px-3 py-2 text-sm font-semibold transition ${
+                active
+                  ? "border-blue-600 bg-blue-600 text-white"
+                  : "border-slate-200 bg-white text-slate-600 hover:border-blue-200 hover:bg-blue-50"
+              }`}
+            >
+              {option}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ChatPanel({
   messages,
   input,
@@ -1483,6 +1731,9 @@ function ChatPanel({
   const [showSavedChats, setShowSavedChats] = useState(false);
   // 빈 대화 상태 안내 분기용 — 저장된 필터 요약
   const savedFilterParts: string[] = [];
+  if (savedFilter?.user_type) {
+    savedFilterParts.push(`유형 ${savedFilter.user_type}`);
+  }
   if (savedFilter?.regions?.[0] && savedFilter.regions[0] !== "전국") {
     savedFilterParts.push(`지역 ${savedFilter.regions[0]}`);
   }
@@ -1497,6 +1748,16 @@ function ChatPanel({
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between gap-3 border-b border-zinc-200 px-4 py-3 dark:border-zinc-700">
         <div className="flex items-center gap-3">
+          {showSavedChats && (
+            <button
+              type="button"
+              onClick={() => setShowSavedChats(false)}
+              aria-label="채팅으로 돌아가기"
+              className="rounded-full p-1 text-xl leading-none text-zinc-500 hover:bg-zinc-100"
+            >
+              ‹
+            </button>
+          )}
           <Image
             src="/chatbot_icon.png"
             alt="PolicyRec 챗봇"
@@ -1505,9 +1766,11 @@ function ChatPanel({
             className="h-9 w-9 shrink-0 rounded-full border border-zinc-200 bg-white object-cover dark:border-zinc-700"
           />
           <div>
-            <h3 className="text-sm font-semibold">PolicyRec 챗봇</h3>
+            <h3 className="text-sm font-semibold">
+              {showSavedChats ? "대화" : "PolicyRec 챗봇"}
+            </h3>
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              궁금한 걸 물어보세요! 정책 추천도 가능합니다.
+              {showSavedChats ? "저장된 대화를 이어서 볼 수 있어요." : "정책 조건을 알려주시면 맞춤 추천을 도와드려요."}
             </p>
           </div>
         </div>
@@ -1521,23 +1784,18 @@ function ChatPanel({
         </button>
       </div>
 
+      {!showSavedChats && (
       <div className="flex flex-wrap gap-2 border-b border-zinc-200 px-4 py-2 dark:border-zinc-700">
         <button
           type="button"
-          onClick={onNewChat}
+          onClick={() => {
+            setShowSavedChats(false);
+            onNewChat();
+          }}
           disabled={messages.length === 0 && !input.trim()}
           className="rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
         >
           새 채팅 시작
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowSavedChats((value) => !value)}
-          disabled={!currentUser}
-          title={currentUser ? "저장한 대화 보기" : "로그인하면 저장 가능"}
-          className="rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-        >
-          저장 목록
         </button>
         {!currentUser && (
           <span className="self-center text-[11px] text-zinc-500">
@@ -1545,44 +1803,36 @@ function ChatPanel({
           </span>
         )}
       </div>
+      )}
 
-      {/* 저장 목록 패널 — 채팅 영역과 분리된 독립 섹션 */}
       {showSavedChats && (
-        <div className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900">
-          <div className="flex items-center justify-between gap-2 px-4 py-2">
-            <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">
-              저장한 대화 {savedChats.length}개
-            </p>
-            <button
-              type="button"
-              onClick={() => setShowSavedChats(false)}
-              className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
-            >
-              닫기
-            </button>
-          </div>
-          <div className="max-h-56 overflow-y-auto px-3 pb-3">
+        <div className="flex-1 overflow-y-auto bg-zinc-50 p-4 dark:bg-zinc-900">
             {!currentUser ? (
               <p className="text-xs text-zinc-500">로그인하면 저장 목록을 볼 수 있어요.</p>
             ) : savedChatsSetupRequired ? (
               <p className="text-xs leading-5 text-amber-700 dark:text-amber-300">
-                saved_chats 테이블 접근이 필요합니다.
-                Database/ERD_table_info_v1.md 기준 DB 구조를 확인해주세요.
+                저장 대화 접근 확인이 필요합니다. Supabase에서 chat_history 테이블과
+                스키마 캐시 갱신 여부를 확인해주세요.
               </p>
             ) : savedChatsLoading ? (
               <p className="text-xs text-zinc-500">불러오는 중...</p>
             ) : savedChats.length === 0 ? (
-              <p className="text-xs text-zinc-500">아직 저장한 대화가 없습니다.</p>
+              <div className="rounded-2xl border border-dashed border-zinc-300 bg-white p-6 text-center text-sm text-zinc-500">
+                아직 저장한 대화가 없습니다.
+              </div>
             ) : (
-              <ul className="space-y-1.5">
+              <ul className="space-y-2">
                 {savedChats.map((chat) => (
                   <li
                     key={chat.id}
-                    className="flex items-center justify-between gap-2 rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950"
+                    onClick={() => {
+                      setShowSavedChats(false);
+                      onRestoreChat(chat);
+                    }}
+                    className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-left shadow-sm dark:border-zinc-700 dark:bg-zinc-950"
                   >
                     <div className="min-w-0 flex-1">
-                      {/* 제목: title 있으면 title, 없으면 content 앞부분 fallback */}
-                      <p className="truncate text-xs font-medium text-zinc-800 dark:text-zinc-100">
+                      <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">
                         {chat.title ?? chat.content.slice(0, 40)}
                       </p>
                       <time className="text-[11px] text-zinc-400">
@@ -1590,17 +1840,12 @@ function ChatPanel({
                       </time>
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
-                      {/* 이 대화로 돌아가기 — 현재 대화 있으면 이탈 확인 팝업 경유 */}
                       <button
                         type="button"
-                        onClick={() => onRestoreChat(chat)}
-                        className="rounded px-2 py-1 text-xs text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-950"
-                      >
-                        돌아가기
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onDeleteSavedChat(chat.id)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onDeleteSavedChat(chat.id);
+                        }}
                         className="rounded px-2 py-1 text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
                       >
                         삭제
@@ -1610,45 +1855,42 @@ function ChatPanel({
                 ))}
               </ul>
             )}
-          </div>
         </div>
       )}
 
+      {!showSavedChats && (
       <div className="flex-1 overflow-y-auto p-4">
         {messages.length === 0 && !loading && (
           <div className="space-y-3">
             {currentUser && hasSavedFilter ? (
               <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200">
                 <p className="font-medium">
-                  저장된 필터로 맞춤 추천 가능 ✨
+                  저장된 조건을 바탕으로 추천을 시작합니다.
                 </p>
                 <p className="mt-1 text-xs text-blue-800 dark:text-blue-300">
                   {savedFilterParts.join(" · ")}
                 </p>
                 <p className="mt-2 text-xs">
-                  &quot;나에게 맞는 정책 추천해줘&quot;라고 물어보면 위 정보로 답변해드려요!
+                  예: 지금 신청 가능한 정책 3개만 골라줘.
                 </p>
               </div>
             ) : currentUser ? (
               <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
-                <p className="font-medium">어떤 정책이 궁금하세요?</p>
+                <p className="font-medium">추천에 필요한 조건을 알려주세요.</p>
                 <p className="mt-1 text-xs">
-                  거주지·나이·관심분야를 알려주시면 더 정확히 추천해드릴게요.
-                  홈 화면에서 필터를 저장하면 챗봇에 자동 적용돼요!
+                  지역, 나이, 관심 분야, 현재 상황을 함께 적으면 더 정확하게 좁혀드릴게요.
                 </p>
               </div>
             ) : (
               <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
-                <p className="font-medium">어떤 정책이 궁금하세요?</p>
+                <p className="font-medium">상황을 한 문장으로 적어주세요.</p>
                 <p className="mt-1 text-xs">
-                  거주지·나이·관심분야를 알려주시면 더 정확히 추천해드릴게요.
-                  예: &quot;25살 서울에서 창업하려고 해요&quot;
+                  예: 서울 거주 25살 예비창업자인데 자금 지원을 찾고 있어요.
                 </p>
               </div>
             )}
             <p className="px-1 text-xs text-zinc-500">
-              💡 다른 예: &quot;청년 창업 지원&quot;, &quot;충남 청년 주거&quot;,
-              &quot;예비창업자 자금&quot;
+              다른 예: &quot;청년 창업 지원&quot;, &quot;충남 청년 주거&quot;, &quot;구직자 교육 지원&quot;
             </p>
           </div>
         )}
@@ -1701,11 +1943,13 @@ function ChatPanel({
 
         {loading && <p className="mt-3 text-sm text-zinc-500">답변 생성 중...</p>}
       </div>
+      )}
 
-      {error && (
+      {!showSavedChats && error && (
         <p className="px-4 pb-1 text-xs text-red-500">{error}</p>
       )}
 
+      {!showSavedChats && (
       <div className="border-t border-zinc-200 p-3 dark:border-zinc-700">
         <div className="flex gap-2">
           <input
@@ -1732,269 +1976,33 @@ function ChatPanel({
           </button>
         </div>
       </div>
+      )}
+
+      <div className="grid grid-cols-2 border-t border-zinc-200 bg-white text-xs font-semibold text-zinc-500 dark:border-zinc-700 dark:bg-zinc-950">
+        <button
+          type="button"
+          onClick={() => setShowSavedChats(false)}
+          className={`py-3 ${!showSavedChats ? "text-blue-600" : "hover:text-zinc-800"}`}
+        >
+          Home
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowSavedChats(true)}
+          disabled={!currentUser}
+          className={`py-3 disabled:opacity-40 ${showSavedChats ? "text-blue-600" : "hover:text-zinc-800"}`}
+        >
+          Messages
+        </button>
+      </div>
     </div>
   );
 }
 
-function AuthPanel({
-  authMode,
-  setAuthMode,
-  loginId,
-  setLoginId,
-  password,
-  setPassword,
-  signupRegion,
-  setSignupRegion,
-  signupCategory,
-  setSignupCategory,
-  signupAge,
-  setSignupAge,
-  signupUserType,
-  setSignupUserType,
-  currentUser,
-  authLoading,
-  authMessage,
-  savedFilter,
-  onSubmit,
-  onLogout,
-  onSaveFilter,
-  onApplyFilter,
-  scrapCount,
-  showScrappedOnly,
-  onToggleScrappedOnly,
-}: {
-  authMode: AuthMode;
-  setAuthMode: (mode: AuthMode) => void;
-  loginId: string;
-  setLoginId: (value: string) => void;
-  password: string;
-  setPassword: (value: string) => void;
-  signupRegion: string;
-  setSignupRegion: (value: string) => void;
-  signupCategory: string;
-  setSignupCategory: (value: string) => void;
-  signupAge: string;
-  setSignupAge: (value: string) => void;
-  signupUserType: string;
-  setSignupUserType: (value: string) => void;
-  currentUser: User | null;
-  authLoading: boolean;
-  authMessage: string | null;
-  savedFilter: SavedFilter | null;
-  onSubmit: () => void;
-  onLogout: () => void;
-  onSaveFilter: () => void;
-  onApplyFilter: () => void;
-  scrapCount: number;
-  showScrappedOnly: boolean;
-  onToggleScrappedOnly: () => void;
-}) {
-  if (currentUser) {
-    const isAdmin = currentUser.role === "admin";
-    return (
-      <section className="w-full rounded-lg border border-zinc-200 bg-white p-3 text-sm dark:border-zinc-700 dark:bg-zinc-900 sm:w-80">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <span className="font-medium">{currentUser.login_id}</span>
-          <div className="flex items-center gap-1">
-            <a
-              href="/mypage"
-              className="rounded-md border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-            >
-              마이페이지
-            </a>
-            {isAdmin && (
-              <a
-                href="/admin"
-                className="rounded-md border border-blue-300 bg-blue-50 px-2 py-1 text-xs text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-950 dark:text-blue-200 dark:hover:bg-blue-900"
-              >
-                관리자페이지
-              </a>
-            )}
-            <button
-              onClick={onLogout}
-              className="rounded-md border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-            >
-              로그아웃
-            </button>
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <button
-            onClick={onSaveFilter}
-            className="rounded-md bg-zinc-900 px-3 py-1.5 text-xs text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-          >
-            현재 필터 저장
-          </button>
-          <button
-            onClick={onApplyFilter}
-            disabled={!savedFilter}
-            className="rounded-md border border-zinc-300 px-3 py-1.5 text-xs hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            저장 필터 적용
-          </button>
-        </div>
-        <div className="mt-3 flex items-center justify-between gap-2 rounded-md bg-zinc-50 px-3 py-2 text-xs dark:bg-zinc-950">
-          <span className="text-zinc-500 dark:text-zinc-400">
-            스크랩 {scrapCount}개
-          </span>
-          <button
-            type="button"
-            onClick={onToggleScrappedOnly}
-            disabled={!showScrappedOnly && scrapCount === 0}
-            className={`rounded-md border px-2 py-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${showScrappedOnly
-              ? "border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-700 dark:bg-amber-900/40 dark:text-amber-200"
-              : "border-zinc-300 text-zinc-600 hover:bg-white dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-              }`}
-          >
-            {showScrappedOnly ? "전체 결과 보기" : "스크랩만 보기"}
-          </button>
-        </div>
-        <p className="mt-2 min-h-4 text-xs text-zinc-500">
-          {authMessage ??
-            (savedFilter ? "저장된 필터가 있습니다." : "저장된 필터가 없습니다.")}
-        </p>
-      </section>
-    );
-  }
 
-  return (
-    <section className="w-full rounded-lg border border-zinc-200 bg-white p-3 text-sm dark:border-zinc-700 dark:bg-zinc-900 sm:w-80">
-      <div className="mb-2 flex gap-1">
-        <button
-          onClick={() => setAuthMode("login")}
-          className={`rounded-md px-2 py-1 text-xs ${authMode === "login"
-            ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-            : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-            }`}
-        >
-          로그인
-        </button>
-        <button
-          onClick={() => setAuthMode("signup")}
-          className={`rounded-md px-2 py-1 text-xs ${authMode === "signup"
-            ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-            : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-            }`}
-        >
-          회원가입
-        </button>
-      </div>
-      <div className="grid gap-2">
-        <input
-          value={loginId}
-          onChange={(e) => setLoginId(e.target.value)}
-          placeholder="아이디"
-          className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-950"
-        />
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") onSubmit();
-          }}
-          placeholder="비밀번호"
-          className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-950"
-        />
-        {authMode === "signup" && (
-          <div className="grid gap-2 rounded-md border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-700 dark:bg-zinc-950">
-            <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              관심정보를 입력하면 맞춤 추천에 바로 활용돼요. (선택)
-            </p>
-            <label className="flex items-center justify-between gap-2 text-xs text-zinc-600 dark:text-zinc-300">
-              <span>사용자 유형</span>
-              <select
-                value={signupUserType}
-                onChange={(e) => setSignupUserType(e.target.value)}
-                className="min-w-0 flex-1 rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
-              >
-                {["선택 안함", "청년", "예비 창업자", "창업자", "기업"].map((opt) => (
-                  <option key={opt} value={opt}>{opt}</option>
-                ))}
-              </select>
-            </label>
-            <label className="flex items-center justify-between gap-2 text-xs text-zinc-600 dark:text-zinc-300">
-              <span>지역</span>
-              <select
-                value={signupRegion}
-                onChange={(e) => setSignupRegion(e.target.value)}
-                className="min-w-0 flex-1 rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
-              >
-                {REGIONS.map((opt) => (
-                  <option key={opt} value={opt}>{opt}</option>
-                ))}
-              </select>
-            </label>
-            <label className="flex items-center justify-between gap-2 text-xs text-zinc-600 dark:text-zinc-300">
-              <span>관심 카테고리</span>
-              <select
-                value={signupCategory}
-                onChange={(e) => setSignupCategory(e.target.value)}
-                className="min-w-0 flex-1 rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
-              >
-                {CATEGORIES.map((opt) => (
-                  <option key={opt} value={opt}>{opt}</option>
-                ))}
-              </select>
-            </label>
-            <label className="flex items-center justify-between gap-2 text-xs text-zinc-600 dark:text-zinc-300">
-              <span>나이</span>
-              <input
-                type="number"
-                min={0}
-                max={120}
-                value={signupAge}
-                onChange={(e) => setSignupAge(e.target.value)}
-                placeholder="예: 25"
-                className="w-24 rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
-              />
-            </label>
-          </div>
-        )}
-        <button
-          onClick={onSubmit}
-          disabled={authLoading || !loginId.trim() || !password}
-          className="rounded-md bg-zinc-900 px-3 py-2 text-sm text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-        >
-          {authLoading
-            ? "처리 중..."
-            : authMode === "login"
-              ? "로그인"
-              : "회원가입"}
-        </button>
-      </div>
-      <p className="mt-2 min-h-4 text-xs text-zinc-500">{authMessage}</p>
-    </section>
-  );
-}
 
-function FilterSelect({
-  label,
-  value,
-  onChange,
-  options,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: readonly string[];
-}) {
-  return (
-    <label className="flex flex-col gap-1.5 text-sm">
-      <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-        {label}
-      </span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
-      >
-        {options.map((opt) => (
-          <option key={opt} value={opt}>
-            {opt}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
+
+
+
+
+

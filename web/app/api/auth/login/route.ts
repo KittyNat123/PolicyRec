@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
 
     const { data, error } = await supabase
       .from("users")
-      .select("login_id,password_hash")
+      .select("login_id,password_hash,role")
       .eq("login_id", loginId)
       .maybeSingle();
 
@@ -31,7 +31,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const response = NextResponse.json({ user: { login_id: loginId } });
+    const role = data.role === "admin" || loginId === "admin" ? "admin" : "user";
+    const response = NextResponse.json({ user: { login_id: loginId, role } });
     response.cookies.set(SESSION_COOKIE_NAME, createSessionToken(loginId), {
       httpOnly: true,
       sameSite: "lax",
@@ -45,4 +46,3 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
-

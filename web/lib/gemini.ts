@@ -138,6 +138,7 @@ export type RagUserContext = {
   region?: string | null;
   category?: string | null;
   targetAge?: number | null;
+  userType?: string | null;
 };
 
 export type SelfQueryFilters = {
@@ -424,6 +425,7 @@ function formatUserContext(userContext?: RagUserContext): string {
   if (userContext.targetAge !== null && userContext.targetAge !== undefined) {
     parts.push(`- 나이: ${userContext.targetAge}세`);
   }
+  if (userContext.userType) parts.push(`- 사용자 유형: ${userContext.userType}`);
   if (parts.length === 0) return "";
   return `사용자 프로필 (저장된 정보):\n${parts.join("\n")}`;
 }

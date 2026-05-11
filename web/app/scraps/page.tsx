@@ -1,7 +1,8 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { AppHeader } from "@/components/AppHeader";
 import { PolicyCard } from "@/components/PolicyCard";
 import type { SearchResult, User } from "@/lib/types";
 
@@ -23,13 +24,22 @@ async function readApiError(response: Response, fallback: string) {
 }
 
 export default function ScrapsPage() {
+  const router = useRouter();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [scrappedIds, setScrappedIds] = useState<Set<number>>(new Set());
   const [items, setItems] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  async function loadScrapsPage() {
+  const grouped = useMemo(() => {
+    return items.reduce<Record<string, SearchResult[]>>((acc, item) => {
+      const key = item.s_category || "기타";
+      acc[key] = [...(acc[key] ?? []), item];
+      return acc;
+    }, {});
+  }, [items]);
+
+  const loadScrapsPage = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -39,8 +49,7 @@ export default function ScrapsPage() {
       setCurrentUser(user);
 
       if (!user) {
-        setScrappedIds(new Set());
-        setItems([]);
+        router.replace("/?auth=login");
         return;
       }
 
@@ -67,7 +76,7 @@ export default function ScrapsPage() {
       });
       if (!detailsRes.ok) {
         throw new Error(
-          await readApiError(detailsRes, "스크랩 공고를 불러오지 못했어요.")
+          await readApiError(detailsRes, "스크랩한 공고를 불러오지 못했어요.")
         );
       }
 
@@ -78,7 +87,7 @@ export default function ScrapsPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [router]);
 
   async function toggleScrap(annId: number) {
     if (!currentUser) return;
@@ -96,11 +105,7 @@ export default function ScrapsPage() {
 
     setScrappedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(annId)) {
-        next.delete(annId);
-      } else {
-        next.add(annId);
-      }
+      next.delete(annId);
       return next;
     });
     setItems((prev) => prev.filter((item) => item.id !== annId));
@@ -109,75 +114,65 @@ export default function ScrapsPage() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadScrapsPage();
-  }, []);
+  }, [loadScrapsPage]);
 
   return (
-    <main className="min-h-screen bg-zinc-50 px-4 py-8 dark:bg-black sm:px-6">
-      <div className="mx-auto max-w-5xl">
-        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-sm text-zinc-500">PolicyRec</p>
-            <h1 className="text-3xl font-bold tracking-tight">스크랩 목록</h1>
-          </div>
-          <div className="flex gap-2">
-            <Link
-              href="/"
-              className="rounded-md border border-zinc-300 px-3 py-2 text-sm hover:bg-white dark:border-zinc-700 dark:hover:bg-zinc-900"
-            >
-              검색으로 돌아가기
-            </Link>
-            <Link
-              href="/profile"
-              className="rounded-md bg-zinc-900 px-3 py-2 text-sm text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-            >
-              내 프로필
-            </Link>
-          </div>
-        </div>
-
+    <div className="min-h-screen bg-slate-50 text-slate-950">
+      <AppHeader currentUser={currentUser} />
+      <main className="mx-auto max-w-5xl px-4 py-7 sm:px-6">
         {loading && (
-          <div className="rounded-lg border border-zinc-200 bg-white p-6 text-sm text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900">
-            스크랩 목록을 불러오는 중...
+          <div className="rounded-lg border border-slate-200 bg-white p-5 text-sm text-slate-500">
+            스크랩 목록을 불러오고 있어요.
           </div>
         )}
 
         {error && (
-          <div className="mb-4 rounded-lg bg-red-50 p-4 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
+          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             {error}
           </div>
         )}
 
         {!loading && !currentUser && (
-          <section className="rounded-lg border border-zinc-200 bg-white p-6 text-sm text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
-            로그인 후 스크랩 목록을 확인할 수 있어요.
+          <section className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600">
+            로그인하면 스크랩한 정책을 확인할 수 있어요.
           </section>
         )}
 
         {!loading && currentUser && (
-          <>
-            <div className="mb-3 text-sm text-zinc-500">
-              스크랩한 공고 {items.length}건
+          <div className="space-y-9">
+            <div>
+              <p className="text-sm font-semibold text-blue-600">스크랩</p>
+              <h1 className="mt-1 text-2xl font-bold">저장한 정책 {items.length}개</h1>
             </div>
+
             {items.length === 0 ? (
-              <div className="rounded-lg border border-zinc-200 bg-white p-6 text-center text-sm text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900">
+              <div className="rounded-lg border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500">
                 아직 스크랩한 정책이 없어요.
               </div>
             ) : (
-              <ul className="space-y-3">
-                {items.map((item) => (
-                  <PolicyCard
-                    key={item.id}
-                    item={item}
-                    canScrap
-                    isScrapped={scrappedIds.has(item.id)}
-                    onToggleScrap={toggleScrap}
-                  />
-                ))}
-              </ul>
+              Object.entries(grouped).map(([category, policies]) => (
+                <section key={category}>
+                  <h2 className="mb-4 flex items-center gap-2 text-lg font-bold">
+                    <span className="h-2 w-2 rounded-full bg-blue-600" />
+                    {category} <span className="text-sm font-medium text-slate-400">({policies.length}개)</span>
+                  </h2>
+                  <ul className="grid gap-4 md:grid-cols-2">
+                    {policies.map((item) => (
+                      <PolicyCard
+                        key={item.id}
+                        item={item}
+                        canScrap
+                        isScrapped={scrappedIds.has(item.id)}
+                        onToggleScrap={toggleScrap}
+                      />
+                    ))}
+                  </ul>
+                </section>
+              ))
             )}
-          </>
+          </div>
         )}
-      </div>
-    </main>
+      </main>
+    </div>
   );
 }
