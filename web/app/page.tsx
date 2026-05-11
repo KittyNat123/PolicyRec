@@ -185,6 +185,18 @@ function toServerSortBy(sortBy: SortBy): ServerSortBy {
   return sortBy === "similarity_desc" ? "end_date_asc" : sortBy;
 }
 
+const SORT_LABELS: Record<SortBy, string> = {
+  end_date_asc: "마감 가까운 순",
+  start_date_desc: "새로 올라온 순",
+  similarity_desc: "유사도 순",
+};
+
+const SORT_DESCRIPTIONS: Record<SortBy, string> = {
+  end_date_asc: "신청 마감이 빠른 정책부터 보여드려요.",
+  start_date_desc: "최근 등록된 정책부터 보여드려요.",
+  similarity_desc: "나와 더 잘 맞는 정책부터 보여드려요.",
+};
+
 export default function Home() {
   const [query, setQuery] = useState("");
   const [filterCategory, setFilterCategory] = useState<string>(ALL);
@@ -362,6 +374,7 @@ export default function Home() {
     if (next === sortBy) return;
     setSortBy(next);
     if (next === "similarity_desc") {
+      if (!searched || lastSearchQuery === "") return;
       setResults((prev) => sortResultsClientSide(prev, next));
       return;
     }
@@ -459,6 +472,10 @@ export default function Home() {
 
   async function doLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
+    if (chatAbortRef.current) {
+      chatAbortRef.current.abort();
+      chatAbortRef.current = null;
+    }
     setCurrentUser(null);
     setSavedFilter(null);
     setScrappedIds(new Set());
@@ -466,13 +483,26 @@ export default function Home() {
     setSavedChats([]);
     setSavedChatsSetupRequired(false);
     setShowScrappedOnly(false);
+    setQuery("");
+    setFilterCategory(ALL);
+    setFilterRegion(ALL);
+    setFilterAge("");
+    setFilterStatus(ALL);
+    setShowClosed(false);
+    setSearched(false);
+    setLastSearchQuery("");
+    setSortBy("end_date_asc");
+    setError(null);
     setAuthMessage("로그아웃했습니다.");
     // 챗봇 상태 초기화 (로그인 사용자 컨텍스트로 받았던 답변 비우기)
     setChatMessages([]);
     setChatInput("");
+    setChatLoading(false);
     setChatError(null);
+    setChatOpen(false);
     setActiveChatId(null);
     setLeaveAction(null);
+    await loadOpenAnnouncements(0, "end_date_asc", false);
   }
 
   async function toggleScrap(annId: number) {
@@ -803,10 +833,11 @@ export default function Home() {
       if (trimmed === "") {
         setBrowseHasMore(Boolean(data.hasMore));
         setBrowseOffset(effectiveOffset + newResults.length);
-        if (options?.sortOverride) setSortBy(options.sortOverride);
+        if (!isAppend) setSortBy(options?.sortOverride ?? effectiveSortBy);
       } else {
         setBrowseHasMore(false);
         setBrowseOffset(0);
+        if (!isAppend) setSortBy("similarity_desc");
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "알 수 없는 오류");
@@ -824,9 +855,10 @@ export default function Home() {
     setFilterStatus(ALL);
     setError(null);
     setLastSearchQuery("");
+    setSortBy("end_date_asc");
     // 검색 모드 종료 → 첫 화면(모집중 공고)으로 복귀
     setSearched(false);
-    void loadOpenAnnouncements(0, toServerSortBy(sortBy), false);
+    void loadOpenAnnouncements(0, "end_date_asc", false);
   }
 
   async function handleChatSend() {
@@ -926,15 +958,52 @@ export default function Home() {
         )
       )
       : statusFilteredResults;
+
+  const activeFilterChips = [
+    filterCategory !== ALL
+      ? { key: "category", label: "카테고리", value: filterCategory }
+      : null,
+    filterRegion !== ALL
+      ? { key: "region", label: "지역", value: filterRegion }
+      : null,
+    filterAge.trim()
+      ? { key: "age", label: "나이", value: `${filterAge.trim()}세` }
+      : null,
+    filterStatus !== ALL
+      ? { key: "status", label: "모집상태", value: filterStatus }
+      : null,
+    showClosed
+      ? { key: "closed", label: "마감 공고", value: "포함" }
+      : null,
+    showScrappedOnly && currentUser
+      ? { key: "scrap", label: "보기", value: "스크랩만" }
+      : null,
+  ].filter((chip): chip is { key: string; label: string; value: string } =>
+    Boolean(chip)
+  );
+  const hasActiveFilters = activeFilterChips.length > 0;
+  const resultHeading = showScrappedOnly && currentUser
+    ? "스크랩한 공고"
+    : searched
+      ? "검색 결과"
+      : "지금 신청 가능한 정책";
+  const resultCountLabel = `${visibleResults.length.toLocaleString("ko-KR")}건`;
+  const isInitialLoading = !searched && browseLoading && results.length === 0;
+  const isAdmin = currentUser?.role === "admin";
+  const canSortBySimilarity = searched && lastSearchQuery !== "";
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-black">
-      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
-        <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">PolicyRec</h1>
-            <p className="mt-2 text-zinc-600 dark:text-zinc-400">
-              청년·창업자·기업을 위한 정책 추천{" "}
-              <span className="text-xs text-zinc-400">Next.js MVP</span>
+    <div className="min-h-screen bg-zinc-50 text-zinc-950 dark:bg-black dark:text-zinc-50">
+      <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-10">
+        <header className="mb-6 flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+          <div className="max-w-2xl">
+            <p className="mb-2 text-xs font-semibold uppercase text-blue-700 dark:text-blue-300">
+              통합 정책 검색
+            </p>
+            <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
+              PolicyRec
+            </h1>
+            <p className="mt-3 text-sm leading-6 text-zinc-600 dark:text-zinc-300 sm:text-base">
+              키워드와 조건을 함께 보고, 지금 지원 가능한 정책부터 빠르게 확인하세요.
             </p>
           </div>
           <AuthPanel
@@ -972,181 +1041,267 @@ export default function Home() {
           />
         </header>
 
-        <section className="mb-8 space-y-3">
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleSearch();
-              }}
-              placeholder="예: 25살 청년이 받을 수 있는 창업 지원이 궁금해요"
-              className="min-w-0 flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
-            />
+        <section className="mb-6 rounded-lg border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 sm:p-5">
+          <div className="flex flex-col gap-3 lg:flex-row">
+            <label className="min-w-0 flex-1">
+              <span className="mb-1.5 block text-xs font-semibold text-zinc-600 dark:text-zinc-300">
+                검색어
+              </span>
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSearch();
+                }}
+                placeholder="예: 25살 청년 창업 지원, 서울 주거 정책"
+                className="w-full rounded-lg border border-zinc-300 bg-white px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
+              />
+            </label>
             <button
+              type="button"
               onClick={() => handleSearch()}
               disabled={loading}
-              className="rounded-lg bg-blue-600 px-6 py-3 text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-lg bg-blue-700 px-6 py-3 font-semibold text-white transition-colors hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-400 dark:focus:ring-offset-zinc-950 lg:self-end"
             >
-              {loading ? "검색 중..." : "검색"}
+              {loading ? "찾는 중..." : "정책 찾기"}
             </button>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <FilterSelect
-              label="카테고리"
-              value={filterCategory}
-              onChange={setFilterCategory}
-              options={CATEGORIES}
-            />
-            <FilterSelect
-              label="지역"
-              value={filterRegion}
-              onChange={setFilterRegion}
-              options={REGIONS}
-            />
-            <label className="inline-flex items-center gap-2 text-sm">
-              <span className="text-zinc-500 dark:text-zinc-400">나이</span>
-              <input
-                type="number"
-                min={0}
-                max={120}
-                value={filterAge}
-                onChange={(e) => setFilterAge(e.target.value)}
-                placeholder="예: 25"
-                className="w-24 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
-              />
-            </label>
-            <FilterSelect
-              label="모집상태"
-              value={filterStatus}
-              onChange={(v) =>
-                setFilterStatus(v as RecruitmentStatus | typeof ALL)
-              }
-              options={STATUSES as readonly string[]}
-            />
-            <div className="ml-auto flex items-center gap-3">
-              <label className="inline-flex cursor-pointer items-center gap-1.5 text-sm text-zinc-600 dark:text-zinc-300">
-                <input
-                  type="checkbox"
-                  checked={showClosed}
-                  onChange={(e) => setShowClosed(e.target.checked)}
-                  className="h-4 w-4 cursor-pointer rounded border-zinc-300 text-blue-600 focus:ring-blue-500 dark:border-zinc-600 dark:bg-zinc-800"
-                />
-                마감 공고도 확인하기
-              </label>
-              <button
-                type="button"
-                onClick={handleResetFilters}
-                className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-600 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          <div className="mt-5 border-t border-zinc-100 pt-4 dark:border-zinc-800">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                  필터
+                </h2>
+                <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                  조건을 바꾼 뒤 정책 찾기를 누르면 결과가 갱신됩니다.
+                </p>
+              </div>
+              <span
+                className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                  hasActiveFilters
+                    ? "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200"
+                    : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+                }`}
               >
-                검색 초기화
-              </button>
+                {hasActiveFilters ? "조건 적용 중" : "전체 조건"}
+              </span>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <FilterSelect
+                label="카테고리"
+                value={filterCategory}
+                onChange={setFilterCategory}
+                options={CATEGORIES}
+              />
+              <FilterSelect
+                label="지역"
+                value={filterRegion}
+                onChange={setFilterRegion}
+                options={REGIONS}
+              />
+              <label className="flex flex-col gap-1.5 text-sm">
+                <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                  나이
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={120}
+                  value={filterAge}
+                  onChange={(e) => setFilterAge(e.target.value)}
+                  placeholder="예: 25"
+                  className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
+                />
+              </label>
+              <FilterSelect
+                label="모집상태"
+                value={filterStatus}
+                onChange={(v) =>
+                  setFilterStatus(v as RecruitmentStatus | typeof ALL)
+                }
+                options={STATUSES as readonly string[]}
+              />
+            </div>
+
+            <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex min-h-9 flex-wrap items-center gap-2">
+                {hasActiveFilters ? (
+                  activeFilterChips.map((chip) => (
+                    <button
+                      key={chip.key}
+                      type="button"
+                      aria-label={`${chip.label} ${chip.value} 조건 해제`}
+                      onClick={() => {
+                        if (chip.key === "category") setFilterCategory(ALL);
+                        if (chip.key === "region") setFilterRegion(ALL);
+                        if (chip.key === "age") setFilterAge("");
+                        if (chip.key === "status") setFilterStatus(ALL);
+                        if (chip.key === "closed") setShowClosed(false);
+                        if (chip.key === "scrap") setShowScrappedOnly(false);
+                      }}
+                      className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-800 transition-colors hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200 dark:hover:bg-blue-900/70"
+                    >
+                      <span className="text-blue-500 dark:text-blue-300">
+                        {chip.label}
+                      </span>
+                      {chip.value}
+                      <span aria-hidden="true" className="text-sm leading-none">
+                        ×
+                      </span>
+                    </button>
+                  ))
+                ) : (
+                  <span className="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
+                    전체 카테고리 · 전체 지역 · 나이 제한 없음
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300">
+                  <input
+                    type="checkbox"
+                    checked={showClosed}
+                    onChange={(e) => setShowClosed(e.target.checked)}
+                    className="h-4 w-4 cursor-pointer rounded border-zinc-300 text-blue-600 focus:ring-blue-500 dark:border-zinc-600 dark:bg-zinc-800"
+                  />
+                  마감 공고 포함
+                </label>
+                <button
+                  type="button"
+                  onClick={handleResetFilters}
+                  className="rounded-md border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-600 transition-colors hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                >
+                  전체 초기화
+                </button>
+              </div>
             </div>
           </div>
         </section>
 
         {error && (
-          <div className="mb-6 rounded-lg bg-red-50 p-4 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
-            {error}
-          </div>
-        )}
-
-        {searched && !loading && !error && (
-          <div className="mb-3 text-sm text-zinc-500">
-            {showScrappedOnly && currentUser ? "스크랩한 공고" : "검색 결과"}{" "}
-            {visibleResults.length}건
-            {filterStatus !== ALL && results.length !== visibleResults.length && (
-              <span className="text-zinc-400">
-                {" "}
-                (전체 {results.length}건 중 모집상태 필터 적용)
-              </span>
-            )}
-            {showScrappedOnly && currentUser && (
-              <span className="text-zinc-400"> (스크랩한 공고만 보기)</span>
-            )}
+          <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+            <p className="font-semibold">검색을 완료하지 못했어요.</p>
+            <p className="mt-1">{error}</p>
           </div>
         )}
 
         {/* 정렬 토글 — 스크랩만 보기/에러 외에 항상 표시 (키워드 검색은 클라이언트 재정렬) */}
-        {!showScrappedOnly && !error && results.length > 0 && (
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-            <div className="text-sm text-zinc-500">
-              {!searched ? (
-                <>
-                  모집중 공고 {results.length}건
-                  {browseHasMore && (
-                    <span className="text-zinc-400"> (더 보기 가능)</span>
-                  )}
-                </>
-              ) : null}
-            </div>
-            <div className="flex items-center gap-1 rounded-lg border border-zinc-200 bg-white p-0.5 text-sm dark:border-zinc-700 dark:bg-zinc-900">
-              {searched && lastSearchQuery !== "" && (
-                <button
-                  type="button"
-                  onClick={() => handleSortChange("similarity_desc")}
-                  className={`rounded-md px-3 py-1 transition-colors ${sortBy === "similarity_desc"
-                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                    : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                    }`}
-                >
-                  유사도순
-                </button>
+        {!error && (results.length > 0 || searched) && (
+          <section className="mb-4 rounded-lg border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+                    {resultHeading}
+                  </h2>
+                  <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
+                    {resultCountLabel}
+                  </span>
+                </div>
+              </div>
+              {!showScrappedOnly && results.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                    정렬
+                  </span>
+                  <div className="flex flex-wrap items-center gap-1 rounded-lg border border-zinc-200 bg-zinc-50 p-1 text-sm dark:border-zinc-700 dark:bg-zinc-900">
+                    {canSortBySimilarity && (
+                      <button
+                        type="button"
+                        aria-pressed={sortBy === "similarity_desc"}
+                        title={SORT_DESCRIPTIONS.similarity_desc}
+                        onClick={() => handleSortChange("similarity_desc")}
+                        className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors sm:text-sm ${sortBy === "similarity_desc"
+                          ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                          : "text-zinc-600 hover:bg-white dark:text-zinc-300 dark:hover:bg-zinc-800"
+                          }`}
+                      >
+                        {SORT_LABELS.similarity_desc}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      aria-pressed={sortBy === "end_date_asc"}
+                      title={SORT_DESCRIPTIONS.end_date_asc}
+                      onClick={() => handleSortChange("end_date_asc")}
+                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors sm:text-sm ${sortBy === "end_date_asc"
+                        ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                        : "text-zinc-600 hover:bg-white dark:text-zinc-300 dark:hover:bg-zinc-800"
+                        }`}
+                    >
+                      {SORT_LABELS.end_date_asc}
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={sortBy === "start_date_desc"}
+                      title={SORT_DESCRIPTIONS.start_date_desc}
+                      onClick={() => handleSortChange("start_date_desc")}
+                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors sm:text-sm ${sortBy === "start_date_desc"
+                        ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                        : "text-zinc-600 hover:bg-white dark:text-zinc-300 dark:hover:bg-zinc-800"
+                        }`}
+                    >
+                      {SORT_LABELS.start_date_desc}
+                    </button>
+                  </div>
+                </div>
               )}
-              <button
-                type="button"
-                onClick={() => handleSortChange("end_date_asc")}
-                className={`rounded-md px-3 py-1 transition-colors ${sortBy === "end_date_asc"
-                  ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                  : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                  }`}
-              >
-                마감 임박순
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSortChange("start_date_desc")}
-                className={`rounded-md px-3 py-1 transition-colors ${sortBy === "start_date_desc"
-                  ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                  : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                  }`}
-              >
-                새 공고순
-              </button>
             </div>
-          </div>
+          </section>
         )}
 
         {searched && !loading && !scrapsLoading && visibleResults.length === 0 && !error && (
-          <div className="py-16 text-center text-zinc-500">
-            {showScrappedOnly && currentUser
-              ? "아직 스크랩한 정책이 없어요."
-              : "검색 결과가 없어요. 키워드나 필터를 조정해보세요."}
+          <div className="rounded-lg border border-dashed border-zinc-300 bg-white px-6 py-14 text-center dark:border-zinc-700 dark:bg-zinc-950">
+            <p className="text-base font-semibold text-zinc-800 dark:text-zinc-100">
+              {showScrappedOnly && currentUser
+                ? "아직 스크랩한 정책이 없어요."
+                : "조건에 맞는 정책을 찾지 못했어요."}
+            </p>
+            <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-zinc-500 dark:text-zinc-400">
+              {showScrappedOnly && currentUser
+                ? "관심 있는 정책 카드에서 스크랩을 눌러두면 여기에서 다시 볼 수 있어요."
+                : "지역이나 카테고리를 전체로 바꾸거나, 검색어를 조금 더 넓게 입력해보세요."}
+            </p>
+            {!showScrappedOnly && (
+              <button
+                type="button"
+                onClick={handleResetFilters}
+                className="mt-5 rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+              >
+                조건 전체 초기화
+              </button>
+            )}
           </div>
         )}
 
         {scrapsLoading && scrappedIds.size > 0 && showScrappedOnly && currentUser && (
-          <div className="py-16 text-center text-zinc-500">
-            스크랩한 공고를 불러오는 중...
+          <div className="rounded-lg border border-zinc-200 bg-white px-6 py-14 text-center text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400">
+            스크랩한 공고를 불러오고 있어요.
           </div>
         )}
 
         {/* 첫 화면 모드 로딩/빈 상태 */}
-        {!searched && browseLoading && results.length === 0 && (
-          <div className="py-16 text-center text-zinc-500">
-            모집중인 공고를 불러오는 중...
+        {isInitialLoading && (
+          <div className="rounded-lg border border-zinc-200 bg-white px-6 py-14 text-center text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400">
+            지금 신청 가능한 정책을 불러오고 있어요.
           </div>
         )}
 
         {!searched && !browseLoading && results.length === 0 && !error && (
-          <div className="py-16 text-center text-zinc-500">
-            현재 모집중인 공고가 없어요.
+          <div className="rounded-lg border border-dashed border-zinc-300 bg-white px-6 py-14 text-center dark:border-zinc-700 dark:bg-zinc-950">
+            <p className="text-base font-semibold text-zinc-800 dark:text-zinc-100">
+              현재 모집중인 공고가 없어요.
+            </p>
+            <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+              마감 공고 포함을 켜거나 검색어를 입력해 다시 확인해보세요.
+            </p>
           </div>
         )}
 
-        <ul className="space-y-3">
+        <ul className="space-y-4">
           {visibleResults.map((r) => (
             <PolicyCard
               key={r.id}
@@ -1154,20 +1309,21 @@ export default function Home() {
               canScrap={Boolean(currentUser)}
               isScrapped={scrappedIds.has(r.id)}
               onToggleScrap={toggleScrap}
+              showSimilarityScore={isAdmin}
             />
           ))}
         </ul>
 
         {/* 더 보기 버튼 — 첫 화면 모드 + 필터-only 검색 모드에서 표시 */}
         {browseHasMore && !showScrappedOnly && !error && (
-          <div className="mt-6 flex justify-center">
+          <div className="mt-7 flex justify-center">
             <button
               type="button"
               onClick={handleLoadMore}
               disabled={browseLoading || loading}
-              className="rounded-md border border-zinc-300 bg-white px-6 py-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+              className="rounded-md border border-zinc-300 bg-white px-6 py-2.5 text-sm font-semibold text-zinc-700 transition-colors hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
             >
-              {(browseLoading || loading) ? "불러오는 중..." : "더 보기"}
+              {(browseLoading || loading) ? "더 불러오는 중..." : "정책 더 보기"}
             </button>
           </div>
         )}
@@ -1532,6 +1688,7 @@ function ChatPanel({
                           canScrap={Boolean(currentUser)}
                           isScrapped={scrappedIds.has(r.id)}
                           onToggleScrap={onToggleScrap}
+                          showSimilarityScore={currentUser?.role === "admin"}
                         />
                       ))}
                     </ul>
@@ -1823,12 +1980,14 @@ function FilterSelect({
   options: readonly string[];
 }) {
   return (
-    <label className="inline-flex items-center gap-2 text-sm">
-      <span className="text-zinc-500 dark:text-zinc-400">{label}</span>
+    <label className="flex flex-col gap-1.5 text-sm">
+      <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+        {label}
+      </span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
+        className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900"
       >
         {options.map((opt) => (
           <option key={opt} value={opt}>
