@@ -46,15 +46,17 @@ function DetailRow({
 }
 
 function categoryClass(category: string | null) {
-  if (category === "창업") return "bg-orange-100 text-orange-700";
-  if (category === "주거") return "bg-violet-100 text-violet-700";
-  if (category === "복지/문화" || category === "복지") {
+  if (category === "주거") return "bg-orange-100 text-orange-700";
+  if (category === "창업") return "bg-violet-100 text-violet-700";
+  if (category === "취업" || category === "인력/일자리") {
     return "bg-emerald-100 text-emerald-700";
   }
-  if (category === "자금" || category === "금융") {
+  if (category === "금융" || category === "자금") {
     return "bg-yellow-100 text-yellow-700";
   }
-  if (category === "교육/멘토링") return "bg-cyan-100 text-cyan-700";
+  if (category === "교육" || category === "복지") {
+    return "bg-cyan-100 text-cyan-700";
+  }
   return "bg-blue-50 text-blue-700";
 }
 
@@ -92,11 +94,11 @@ export function PolicyCard({
   const similarityLabel =
     item.similarity > 0
       ? `유사도 ${Math.round(item.similarity * 100)}%`
-      : "조건 일치";
+      : "유사도 정보";
   const youthFallbackUrl = youthDetailUrl(item);
   const detailUrl = isYouth ? youthFallbackUrl ?? item.detail_url : item.detail_url;
   const urgent = dday === "D-day" || /^D-[1-7]$/.test(dday);
-  const statusLabel = urgent && status === "모집중" ? "마감임박" : status;
+  const statusLabel = urgent ? "마감임박" : status;
   const statusClass =
     status === "마감"
       ? "border-slate-200 bg-slate-100 text-slate-500"
@@ -109,6 +111,8 @@ export function PolicyCard({
     ...(item.target_tags?.slice(0, 3).map((tag) => `#${tag}`) ?? []),
   ].filter((tag): tag is string => hasText(tag));
   const hasTargetTags = Boolean(item.target_tags?.length);
+  const supportSummary =
+    item.support_type || additionalConditions || summary || "요약 정보 없음";
 
   return (
     <li className="group rounded-lg border border-slate-200 bg-white p-5 shadow-sm transition hover:border-blue-200 hover:shadow-md">
@@ -124,7 +128,7 @@ export function PolicyCard({
               </span>
             )}
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">
-              청년
+              대상
             </span>
           </div>
 
@@ -143,7 +147,7 @@ export function PolicyCard({
             )}
           </h2>
           <p className="mt-2 line-clamp-1 text-sm text-slate-500">
-            {provider || "기관 확인필요"}
+            {provider || "제공 기관 정보 없음"}
           </p>
         </div>
 
@@ -184,17 +188,17 @@ export function PolicyCard({
       )}
 
       <div className="mt-4 rounded-lg bg-blue-50 px-4 py-3">
-        <p className="text-xs font-bold text-blue-700">최대 혜택</p>
+        <p className="text-xs font-bold text-blue-700">지원 내용</p>
         <p className="mt-1 line-clamp-1 text-sm font-bold text-blue-800">
-          {item.support_type || additionalConditions || "상세 공고에서 확인"}
+          {supportSummary}
         </p>
       </div>
 
       {primaryTags.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5">
-          {primaryTags.slice(0, 3).map((tag, i) => (
+          {primaryTags.slice(0, 3).map((tag, index) => (
             <span
-              key={`${tag}-${i}`}
+              key={`${tag}-${index}`}
               className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-500"
             >
               {tag}
@@ -205,10 +209,10 @@ export function PolicyCard({
 
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
         <span className="text-xs font-medium text-slate-500">
-          □ {endDateLabel} 마감
+          {endDateLabel} 마감
         </span>
         <span className="text-xs font-medium text-slate-500">
-          ⌖ {item.region || "전국"}
+          {item.region || "지역 미상"}
         </span>
         {detailUrl && (
           <a
@@ -217,7 +221,7 @@ export function PolicyCard({
             rel="noopener noreferrer"
             className="ml-auto rounded-md border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50"
           >
-            상세
+            공고 보기
           </a>
         )}
         <button
@@ -226,7 +230,7 @@ export function PolicyCard({
           aria-expanded={expanded}
           className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50"
         >
-          {expanded ? "접기" : "자세히"}
+          {expanded ? "접기" : "더보기"}
         </button>
       </div>
 
@@ -234,16 +238,16 @@ export function PolicyCard({
         <dl className="mt-4 space-y-3 rounded-md bg-slate-50 p-4">
           {summary && <DetailRow label="요약">{summary}</DetailRow>}
           <DetailRow label="신청 방법">
-            {applicationMethod ?? "공고문 상세 링크 확인 필요"}
+            {applicationMethod ?? "공고 본문에서 확인해 주세요"}
           </DetailRow>
           <DetailRow label="제출 서류">
-            {requiredDocuments ?? "공고문 확인 필요"}
+            {requiredDocuments ?? "공고 본문에서 확인해 주세요"}
           </DetailRow>
           {additionalConditions && (
             <DetailRow label="추가 조건">{additionalConditions}</DetailRow>
           )}
           {provider && <DetailRow label="제공 기관">{provider}</DetailRow>}
-          <DetailRow label="대상 연령">{targetAgeLabel}</DetailRow>
+          <DetailRow label="연령 조건">{targetAgeLabel}</DetailRow>
           {targetGroup && <DetailRow label="대상">{targetGroup}</DetailRow>}
           {hasTargetTags && (
             <DetailRow label="대상 태그">

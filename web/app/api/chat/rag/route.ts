@@ -38,13 +38,14 @@ async function loadUserContext(
       .maybeSingle(),
     supabase
       .from("user_info")
-      .select("regions,categories,age_group,user_type")
+      .select("region,regions,categories,age_group,user_type")
       .eq("login_id", loginId)
       .maybeSingle(),
   ]);
 
   const filter = filterResult.data;
   const userInfo = userInfoResult.data as {
+    region?: string | null;
     regions?: string[] | null;
     categories?: string[] | null;
     age_group?: string | null;
@@ -436,10 +437,11 @@ function isPersonalizedRequest(message: string): boolean {
 function hasUserProfile(userContext: RagUserContext | undefined): boolean {
   if (!userContext) return false;
   return Boolean(
-    userContext.region ||
-      userContext.category ||
-      userContext.userType ||
-      (userContext.targetAge !== null && userContext.targetAge !== undefined)
+    userContext.region &&
+      userContext.category &&
+      userContext.userType &&
+      userContext.targetAge !== null &&
+      userContext.targetAge !== undefined
   );
 }
 

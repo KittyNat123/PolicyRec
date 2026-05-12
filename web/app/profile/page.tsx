@@ -9,11 +9,12 @@ import type { SavedFilter, User } from "@/lib/types";
 type UserInfo = {
   email?: string | null;
   phone?: string | null;
+  name?: string | null;
   nickname?: string | null;
   age_group?: string | null;
+  region?: string | null;
   regions?: string[] | null;
   categories?: string[] | null;
-  interest_keywords?: string[] | null;
   user_type?: string | null;
 };
 
@@ -33,6 +34,7 @@ export default function ProfilePage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [formName, setFormName] = useState("");
+  const [formNickname, setFormNickname] = useState("");
   const [formEmail, setFormEmail] = useState("");
   const [formPhone, setFormPhone] = useState("");
   const [formAge, setFormAge] = useState("");
@@ -59,40 +61,39 @@ export default function ProfilePage() {
           return;
         }
 
-        if (user) {
-          const infoRes = await fetch("/api/mypage/info", { cache: "no-store" });
-          if (!infoRes.ok && infoRes.status !== 401) {
-            throw new Error(await readApiError(infoRes, "프로필 정보를 불러오지 못했어요."));
-          }
-          const infoData = await infoRes.json().catch(() => ({}));
-          const loadedInfo = (infoData.info ?? null) as UserInfo | null;
-          setInfo(loadedInfo);
-          setFormName(loadedInfo?.nickname ?? "");
-          setFormEmail(loadedInfo?.email ?? "");
-          setFormPhone(loadedInfo?.phone ?? "");
-          setFormAge(loadedInfo?.age_group ?? "");
-          setFormRegion(loadedInfo?.regions?.[0] ?? ALL_OPTION);
-          setFormCategory(loadedInfo?.categories?.[0] ?? ALL_OPTION);
-          setFormUserType(loadedInfo?.user_type ?? USER_TYPES[0]);
+        const infoRes = await fetch("/api/mypage/info", { cache: "no-store" });
+        if (!infoRes.ok && infoRes.status !== 401) {
+          throw new Error(await readApiError(infoRes, "프로필 정보를 불러오지 못했습니다."));
         }
+
+        const infoData = await infoRes.json().catch(() => ({}));
+        const loadedInfo = (infoData.info ?? null) as UserInfo | null;
+        setInfo(loadedInfo);
+        setFormName(loadedInfo?.name ?? loadedInfo?.nickname ?? "");
+        setFormNickname(loadedInfo?.nickname ?? loadedInfo?.name ?? "");
+        setFormEmail(loadedInfo?.email ?? "");
+        setFormPhone(loadedInfo?.phone ?? "");
+        setFormAge(loadedInfo?.age_group ?? "");
+        setFormRegion(loadedInfo?.region ?? loadedInfo?.regions?.[0] ?? ALL_OPTION);
+        setFormCategory(loadedInfo?.categories?.[0] ?? ALL_OPTION);
+        setFormUserType(loadedInfo?.user_type ?? USER_TYPES[0]);
       } catch (e) {
-        setError(e instanceof Error ? e.message : "프로필을 불러오지 못했어요.");
+        setError(e instanceof Error ? e.message : "프로필 정보를 불러오지 못했습니다.");
       } finally {
         setLoading(false);
       }
     })();
   }, [router]);
 
-  const displayName = info?.nickname || currentUser?.login_id || "김지현";
-  const age = info?.age_group || savedFilter?.target_age?.toString() || "27";
-  const region = info?.regions?.[0] || savedFilter?.regions?.[0] || "서울";
-  const userType = info?.user_type || "취업준비생";
+  const displayName = info?.name || info?.nickname || currentUser?.login_id || "사용자";
+  const nickname = info?.nickname || displayName;
+  const age = info?.age_group || savedFilter?.target_age?.toString() || "미입력";
+  const region = info?.region || info?.regions?.[0] || savedFilter?.regions?.[0] || "미설정";
+  const userType = info?.user_type || "미설정";
   const email = info?.email || `${currentUser?.login_id ?? "user"}@policyrec.local`;
-  const phone = info?.phone || "미등록";
-  const categories = info?.categories?.length
-    ? info.categories
-    : savedFilter?.categories ?? ["주거", "취업", "금융"];
-  const targets = [userType, "청년", "저소득", "전체"].filter(Boolean);
+  const phone = info?.phone || "미입력";
+  const categories = info?.categories?.length ? info.categories : savedFilter?.categories ?? [];
+  const targets = [userType, age === "미입력" ? null : `${age}세`, region].filter(Boolean) as string[];
 
   async function saveProfile() {
     setSaving(true);
@@ -102,32 +103,61 @@ export default function ProfilePage() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          nickname: formName,
+          name: formName,
+          nickname: formNickname || formName,
           email: formEmail,
           phone: formPhone,
           age_group: formAge,
+          region: formRegion === ALL_OPTION ? null : formRegion,
           regions: formRegion === ALL_OPTION ? [] : [formRegion],
           categories: formCategory === ALL_OPTION ? [] : [formCategory],
           user_type: formUserType === USER_TYPES[0] ? null : formUserType,
-          interest_keywords: info?.interest_keywords ?? [],
         }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? "프로필을 저장하지 못했어요.");
-      setInfo({
+      if (!res.ok) throw new Error(data.error ?? "프로필 저장에 실패했습니다.");
+
+      const nextInfo = (data.info ?? {
         ...info,
-        nickname: formName,
+        name: formName,
+        nickname: formNickname || formName,
         email: formEmail,
         phone: formPhone,
         age_group: formAge,
+        region: formRegion === ALL_OPTION ? null : formRegion,
         regions: formRegion === ALL_OPTION ? [] : [formRegion],
         categories: formCategory === ALL_OPTION ? [] : [formCategory],
         user_type: formUserType === USER_TYPES[0] ? null : formUserType,
-      });
+      }) as UserInfo;
+
+      setInfo(nextInfo);
+      if (data.filter) {
+        setSavedFilter(data.filter as SavedFilter);
+      }
+      setFormName(nextInfo.name ?? nextInfo.nickname ?? "");
+      setFormNickname(nextInfo.nickname ?? nextInfo.name ?? "");
+      setFormEmail(nextInfo.email ?? "");
+      setFormPhone(nextInfo.phone ?? "");
+      setFormAge(nextInfo.age_group ?? "");
+      setFormRegion(nextInfo.region ?? nextInfo.regions?.[0] ?? ALL_OPTION);
+      setFormCategory(nextInfo.categories?.[0] ?? ALL_OPTION);
+      setFormUserType(nextInfo.user_type ?? USER_TYPES[0]);
       setEditOpen(false);
-      setMessage("프로필을 저장했습니다.");
+
+      if (data.setup_required && Array.isArray(data.missing_columns)) {
+        setMessage(`일부 컬럼이 DB에 아직 반영되지 않았습니다: ${data.missing_columns.join(", ")}`);
+      } else {
+        setMessage("프로필을 저장했습니다.");
+      }
+      if (
+        !data.setup_required &&
+        window.sessionStorage.getItem("policyrec-pending-chat-prompt")
+      ) {
+        router.push("/");
+        return;
+      }
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "프로필을 저장하지 못했어요.");
+      setMessage(e instanceof Error ? e.message : "프로필 저장에 실패했습니다.");
     } finally {
       setSaving(false);
     }
@@ -139,7 +169,7 @@ export default function ProfilePage() {
       <main className="mx-auto max-w-3xl px-4 py-7 sm:px-6">
         {loading && (
           <div className="rounded-lg border border-slate-200 bg-white p-5 text-sm text-slate-500">
-            프로필을 불러오고 있어요.
+            프로필 정보를 불러오는 중입니다.
           </div>
         )}
 
@@ -151,7 +181,7 @@ export default function ProfilePage() {
 
         {!loading && !currentUser && (
           <div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-600">
-            로그인하면 프로필과 관심 정책 설정을 확인할 수 있어요.
+            로그인 후 프로필을 확인할 수 있습니다.
           </div>
         )}
 
@@ -167,7 +197,7 @@ export default function ProfilePage() {
                     <h1 className="text-2xl font-bold">{displayName}</h1>
                     <p className="mt-1 text-sm text-blue-100">{currentUser.login_id}</p>
                     <div className="mt-3 flex flex-wrap gap-1.5">
-                      {[`${age}세`, region, userType].map((item) => (
+                      {targets.map((item) => (
                         <span key={item} className="rounded-full bg-white/15 px-2.5 py-1 text-xs font-bold">
                           {item}
                         </span>
@@ -194,7 +224,8 @@ export default function ProfilePage() {
             {editOpen && (
               <InfoPanel title="프로필 편집">
                 <div className="grid gap-3 md:grid-cols-2">
-                  <InputField label="이름" value={formName} onChange={setFormName} placeholder="예: 김지현" />
+                  <InputField label="이름" value={formName} onChange={setFormName} placeholder="이름을 입력해 주세요" />
+                  <InputField label="닉네임" value={formNickname} onChange={setFormNickname} placeholder="닉네임을 입력해 주세요" />
                   <InputField label="이메일" value={formEmail} onChange={setFormEmail} placeholder="name@example.com" />
                   <InputField label="휴대폰 번호" value={formPhone} onChange={setFormPhone} placeholder="010-1234-5678" />
                   <InputField label="나이" value={formAge} onChange={setFormAge} placeholder="예: 25" type="number" />
@@ -217,34 +248,30 @@ export default function ProfilePage() {
 
             <InfoPanel title="기본 정보">
               <InfoRow label="이름" value={displayName} />
+              <InfoRow label="닉네임" value={nickname} />
               <InfoRow label="이메일" value={email} />
-              <InfoRow label="연락처" value={phone} />
-              <InfoRow label="나이" value={age} />
+              <InfoRow label="휴대폰 번호" value={phone} />
+              <InfoRow label="나이" value={age === "미입력" ? age : `${age}세`} />
             </InfoPanel>
 
-            <InfoPanel title="거주지 및 직업">
-              <InfoRow label="거주 지역" value={region} />
-              <InfoRow label="직업 상태" value={userType} />
+            <InfoPanel title="정책 설정 정보">
+              <InfoRow label="지역" value={region} />
+              <InfoRow label="사용자 유형" value={userType} />
             </InfoPanel>
 
             <InfoPanel title="정책 관심 설정">
-              <ChipSet label="나는 해당됩니다" values={targets} activeValues={targets.slice(0, 2)} />
-              <ChipSet label="관심 분야" values={["주거", "창업", "취업", "교육", "복지", "금융", "문화"]} activeValues={categories} />
+              <ChipSet label="내가 관심있는 대상" values={targets} activeValues={targets} />
+              <ChipSet
+                label="관심분야"
+                values={CATEGORIES.filter((value) => value !== ALL_OPTION)}
+                activeValues={categories}
+              />
             </InfoPanel>
 
             <InfoPanel title="알림 설정">
-              <ToggleRow label="마감 임박 알림" sub="스크랩한 정책 마감 7일 전 알림" active={deadlineNotice} onToggle={() => setDeadlineNotice((value) => !value)} />
-              <ToggleRow label="맞춤 정책 추천" sub="새로운 맞춤 정책 등록 시 알림" active={recommendNotice} onToggle={() => setRecommendNotice((value) => !value)} />
-              <ToggleRow label="신청 결과 알림" sub="정책 심사 결과 통보" active={applicationNotice} onToggle={() => setApplicationNotice((value) => !value)} />
-            </InfoPanel>
-
-            <InfoPanel title="보안">
-              {["비밀번호 변경", "2단계 인증 설정", "로그인 기록 보기"].map((item) => (
-                <button key={item} className="flex w-full items-center justify-between py-3 text-left text-sm font-semibold text-slate-700">
-                  {item}
-                  <span className="text-slate-300">›</span>
-                </button>
-              ))}
+              <ToggleRow label="마감 임박 알림" sub="스크랩한 정책의 마감일이 가까워지면 알려드립니다." active={deadlineNotice} onToggle={() => setDeadlineNotice((value) => !value)} />
+              <ToggleRow label="추천 업데이트 알림" sub="내 조건에 맞는 새 정책이 들어오면 알려드립니다." active={recommendNotice} onToggle={() => setRecommendNotice((value) => !value)} />
+              <ToggleRow label="스크랩 활동 알림" sub="저장한 정책 상태가 바뀌면 알려드립니다." active={applicationNotice} onToggle={() => setApplicationNotice((value) => !value)} />
             </InfoPanel>
           </div>
         )}

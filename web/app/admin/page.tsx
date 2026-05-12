@@ -145,10 +145,20 @@ function DashboardTab({
 
   return (
     <div className="space-y-6">
+      <Panel title="DB 연결 상태">
+        <div className="grid gap-3 text-sm md:grid-cols-2">
+          <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-emerald-800">
+            실제 DB 연결: 전체 정책 수, 모집 상태, 분야별 정책 현황, 마감 임박 수
+          </div>
+          <div className="rounded-lg border border-amber-100 bg-amber-50 p-3 text-amber-800">
+            임시 표시: 조회수, 신청 건수, 주간 활동, 최근 로그, 정책/사용자 관리 테이블
+          </div>
+        </div>
+      </Panel>
       <div className="grid gap-4 md:grid-cols-4">
         <AdminMetric label="전체 정책" value={stats.total.toLocaleString()} sub="이번 주 3개 추가" tone="blue" />
-        <AdminMetric label="총 조회수" value="28,541" sub="12.4% 지난주 대비" tone="violet" />
-        <AdminMetric label="신청 건수" value="1,284" sub="8.7% 지난주 대비" tone="green" />
+        <AdminMetric label="총 조회수" value="28,541" sub="임시 지표" tone="violet" />
+        <AdminMetric label="신청 건수" value="1,284" sub="임시 지표" tone="green" />
         <AdminMetric label="마감 임박" value={urgentCount.toLocaleString()} sub="7일 이내" tone="amber" />
       </div>
 

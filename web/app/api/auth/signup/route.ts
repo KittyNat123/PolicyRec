@@ -38,12 +38,18 @@ function normalizeName(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function missingColumnFromError(error: { message?: string }) {
+  const match = error.message?.match(/'([^']+)' column of 'user_info'/);
+  return match?.[1] ?? null;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
     const loginId = normalizeLoginId(body.login_id);
     const password = typeof body.password === "string" ? body.password : "";
-    const nickname = normalizeName(body.nickname);
+    const name = normalizeName(body.name) || normalizeName(body.nickname);
+    const nickname = normalizeName(body.nickname) || name;
     const email = normalizeEmail(body.email);
     const phone = normalizePhone(body.phone);
 
@@ -59,9 +65,15 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    if (nickname.length < 2 || nickname.length > 30) {
+    if (name.length < 2 || name.length > 30) {
       return NextResponse.json(
         { error: "이름은 2~30자로 입력해주세요." },
+        { status: 400 }
+      );
+    }
+    if (nickname.length < 2 || nickname.length > 30) {
+      return NextResponse.json(
+        { error: "닉네임은 2~30자로 입력해주세요." },
         { status: 400 }
       );
     }
@@ -103,16 +115,34 @@ export async function POST(request: NextRequest) {
     const targetAge = normalizeAge(body.target_age);
     const userType = typeof body.user_type === "string" ? body.user_type.trim() : "";
 
-    const { error: userInfoError } = await supabase.from("user_info").insert({
+    const userInfoPayload: Record<string, unknown> = {
       login_id: loginId,
+      name,
       nickname,
       age_group: targetAge !== null ? String(targetAge) : null,
+      region,
       regions: region ? [region] : [],
       categories: category ? [category] : [],
       interest_keywords: [],
       user_type: userType || null,
       phone,
-    });
+    };
+    let userInfoError: { message?: string } | null = null;
+
+    for (let attempt = 0; attempt < 9; attempt++) {
+      const result = await supabase.from("user_info").insert(userInfoPayload);
+      if (!result.error) {
+        userInfoError = null;
+        break;
+      }
+
+      const missingColumn = missingColumnFromError(result.error);
+      if (!missingColumn || !(missingColumn in userInfoPayload)) {
+        userInfoError = result.error;
+        break;
+      }
+      delete userInfoPayload[missingColumn];
+    }
 
     if (userInfoError) {
       return NextResponse.json({ error: userInfoError.message }, { status: 500 });

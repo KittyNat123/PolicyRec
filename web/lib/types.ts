@@ -49,4 +49,6 @@ export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   results?: SearchResult[];
+  ctaLabel?: string;
+  ctaAction?: "profile" | "login";
 };

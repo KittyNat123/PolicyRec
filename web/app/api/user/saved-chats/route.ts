@@ -20,6 +20,18 @@ function isMissingChatHistoryTableError(error: { message?: string; code?: string
   );
 }
 
+function isChatIdRequiredError(error: { message?: string; code?: string }) {
+  const message = error.message ?? "";
+  return (
+    error.code === "23502" ||
+    (message.includes("chat_id") && (
+      message.includes("null value") ||
+      message.includes("violates not-null") ||
+      message.includes("does not have a default")
+    ))
+  );
+}
+
 function normalizePositiveInteger(value: unknown): number | null {
   if (typeof value === "number" && Number.isInteger(value) && value > 0) {
     return value;
@@ -85,17 +97,8 @@ function toSavedChat(row: ChatHistoryRow): SavedChat {
   };
 }
 
-async function nextChatId() {
-  const { data, error } = await supabase
-    .from(CHAT_HISTORY_TABLE)
-    .select("chat_id")
-    .order("chat_id", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) throw error;
-  const latest = normalizePositiveInteger((data as { chat_id?: unknown } | null)?.chat_id);
-  return (latest ?? 0) + 1;
+function createFallbackChatId() {
+  return Date.now() * 1000 + Math.floor(Math.random() * 1000);
 }
 
 function setupErrorResponse(error: { message?: string }) {
@@ -149,17 +152,29 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const chatId = await nextChatId();
-    const { data, error } = await supabase
+    const payload = {
+      login_id: loginId,
+      user_query: firstUserQueryFromTranscript(content),
+      ai_response: content,
+    };
+    let { data, error } = await supabase
       .from(CHAT_HISTORY_TABLE)
-      .insert({
-        chat_id: chatId,
-        login_id: loginId,
-        user_query: firstUserQueryFromTranscript(content),
-        ai_response: content,
-      })
+      .insert(payload)
       .select("chat_id,user_query,ai_response,created_dt")
       .single();
+
+    if (error && isChatIdRequiredError(error)) {
+      const retry = await supabase
+        .from(CHAT_HISTORY_TABLE)
+        .insert({
+          chat_id: createFallbackChatId(),
+          ...payload,
+        })
+        .select("chat_id,user_query,ai_response,created_dt")
+        .single();
+      data = retry.data;
+      error = retry.error;
+    }
 
     if (error) {
       if (isMissingChatHistoryTableError(error)) return setupErrorResponse(error);
@@ -197,6 +212,7 @@ export async function PATCH(request: NextRequest) {
     .update({
       user_query: firstUserQueryFromTranscript(content),
       ai_response: content,
+      created_dt: new Date().toISOString(),
     })
     .eq("login_id", loginId)
     .eq("chat_id", id)

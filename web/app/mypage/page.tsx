@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppHeader } from "@/components/AppHeader";
+import { CATEGORIES } from "@/lib/profile-options";
 import type { User } from "@/lib/types";
 
 type ScrapDetail = {
@@ -33,10 +34,12 @@ type Recommendation = {
 type UserInfo = {
   email?: string | null;
   phone?: string | null;
+  name?: string | null;
+  nickname?: string | null;
   age_group?: string | null;
+  region?: string | null;
   regions?: string[] | null;
   categories?: string[] | null;
-  interest_keywords?: string[] | null;
   user_type?: string | null;
 };
 
@@ -54,20 +57,23 @@ export default function MyPage() {
       const meRes = await fetch("/api/auth/me", { cache: "no-store" });
       const meData = await meRes.json().catch(() => ({}));
       const user = (meData.user ?? null) as User | null;
+
       if (!user) {
         router.replace("/?auth=login");
         return;
       }
+
       setCurrentUser(user);
-      const [scrapsRes, recsRes] = await Promise.all([
+
+      const [scrapsRes, recsRes, infoRes] = await Promise.all([
         fetch("/api/mypage/scraps/detail?page=1", { cache: "no-store" }),
         fetch("/api/mypage/recommendations", { cache: "no-store" }),
+        fetch("/api/mypage/info", { cache: "no-store" }),
       ]);
-      const infoRes = await fetch("/api/mypage/info", { cache: "no-store" });
+
       if (infoRes.ok) {
         const data = await infoRes.json().catch(() => ({}));
-        const loadedInfo = (data.info ?? null) as UserInfo | null;
-        setInfo(loadedInfo);
+        setInfo((data.info ?? null) as UserInfo | null);
       }
       if (scrapsRes.ok) {
         const data = await scrapsRes.json().catch(() => ({}));
@@ -77,16 +83,30 @@ export default function MyPage() {
         const data = await recsRes.json().catch(() => ({}));
         setRecommendations((data.recommendations ?? []) as Recommendation[]);
       }
+
       setLoading(false);
     })();
   }, [router]);
 
   const preferenceSummary = [
-    info?.regions?.[0],
+    info?.region ?? info?.regions?.[0],
     info?.categories?.[0],
     info?.user_type,
     info?.age_group ? `${info.age_group}세` : null,
   ].filter(Boolean);
+
+  const profileRows = [
+    ["이름", info?.name || "미입력"],
+    ["닉네임", info?.nickname || "미입력"],
+    ["이메일", info?.email || "미입력"],
+    ["휴대폰 번호", info?.phone || "미입력"],
+    ["나이", info?.age_group ? `${info.age_group}세` : "미입력"],
+    ["지역", info?.region || info?.regions?.[0] || "미입력"],
+    ["사용자 유형", info?.user_type || "미입력"],
+    ["관심 카테고리", info?.categories?.join(", ") || "미입력"],
+  ];
+
+  const activeCategories = info?.categories?.length ? info.categories : [];
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-950">
@@ -94,7 +114,7 @@ export default function MyPage() {
       <main className="mx-auto max-w-5xl px-4 py-7 sm:px-6">
         {loading ? (
           <div className="rounded-lg border border-slate-200 bg-white p-5 text-sm text-slate-500">
-            마이페이지를 불러오고 있어요.
+            마이페이지를 불러오는 중입니다.
           </div>
         ) : (
           <div className="space-y-9">
@@ -102,7 +122,7 @@ export default function MyPage() {
               <div className="mb-4 flex items-center justify-between">
                 <div>
                   <p className="text-sm font-semibold text-blue-600">마이페이지</p>
-                  <h1 className="mt-1 text-2xl font-bold">맞춤 추천 정책</h1>
+                  <h1 className="mt-1 text-2xl font-bold">AI 추천 공고</h1>
                 </div>
               </div>
               <div className="grid gap-4 md:grid-cols-3">
@@ -111,7 +131,7 @@ export default function MyPage() {
                 ))}
                 {recommendations.length === 0 && (
                   <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-sm text-slate-500 md:col-span-3">
-                    아직 추천 정책이 없습니다.
+                    아직 추천 공고가 없습니다.
                   </div>
                 )}
               </div>
@@ -119,11 +139,11 @@ export default function MyPage() {
 
             <section className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-5 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="text-sm font-semibold text-blue-600">맞춤 추천 기본값</p>
+                <p className="text-sm font-semibold text-blue-600">정책 관심 설정</p>
                 <p className="mt-1 text-sm text-slate-600">
                   {preferenceSummary.length > 0
                     ? preferenceSummary.join(" · ")
-                    : "프로필에서 지역, 나이, 관심 분야를 설정해보세요."}
+                    : "프로필에서 지역, 사용자 유형, 관심 카테고리를 설정해 주세요."}
                 </p>
               </div>
               <button
@@ -131,12 +151,36 @@ export default function MyPage() {
                 onClick={() => router.push("/profile")}
                 className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
               >
-                프로필에서 편집
+                프로필 편집
               </button>
             </section>
 
+            <section className="rounded-lg border border-slate-200 bg-white p-5">
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-blue-600">내 프로필 정보</p>
+                  <h2 className="mt-1 text-xl font-bold">DB 저장 프로필</h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => router.push("/profile")}
+                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  수정하기
+                </button>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {profileRows.map(([label, value]) => (
+                  <div key={label} className="flex items-center justify-between gap-4 rounded-lg bg-slate-50 px-4 py-3 text-sm">
+                    <span className="text-slate-500">{label}</span>
+                    <span className="text-right font-semibold text-slate-900">{value}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+
             <section>
-              <h2 className="mb-4 text-xl font-bold">신청 현황</h2>
+              <h2 className="mb-4 text-xl font-bold">최근 스크랩</h2>
               <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
                 {scraps.slice(0, 3).map((item) => (
                   <div key={item.scrap_id} className="border-b border-slate-100 p-4 last:border-0">
@@ -145,31 +189,45 @@ export default function MyPage() {
                     </span>
                     <h3 className="font-bold text-slate-950">{item.title}</h3>
                     <p className="mt-1 text-xs text-slate-400">
-                      신청일: {new Date(item.scrapped_at).toLocaleDateString("ko-KR")}
+                      스크랩일 {new Date(item.scrapped_at).toLocaleDateString("ko-KR")}
                     </p>
                   </div>
                 ))}
                 {scraps.length === 0 && (
-                  <p className="p-6 text-sm text-slate-500">아직 신청 현황으로 볼 정책이 없습니다.</p>
+                  <p className="p-6 text-sm text-slate-500">아직 스크랩한 정책이 없습니다.</p>
                 )}
               </div>
             </section>
 
             <section>
-              <h2 className="mb-4 text-xl font-bold">관심 분야</h2>
-              <div className="grid gap-3 sm:grid-cols-3">
-                {["주거", "취업", "금융", "복지", "창업", "문화"].map((item, index) => (
-                  <div
-                    key={item}
-                    className={`rounded-lg border p-5 text-center font-bold ${
-                      index % 2 === 0
-                        ? "border-blue-600 bg-blue-600 text-white"
-                        : "border-slate-200 bg-white text-slate-700"
-                    }`}
-                  >
-                    {item}
-                  </div>
-                ))}
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-xl font-bold">관심분야</h2>
+                <button
+                  type="button"
+                  onClick={() => router.push("/profile")}
+                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  관심분야 편집
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-3 rounded-lg border border-slate-200 bg-white p-5">
+                {CATEGORIES.filter((item) => item !== "전체").map((item) => {
+                  const active = activeCategories.includes(item);
+                  return (
+                    <button
+                      key={item}
+                      type="button"
+                      onClick={() => router.push("/profile")}
+                      className={`rounded-full border px-4 py-2 text-sm font-bold transition ${
+                        active
+                          ? "border-blue-600 bg-blue-600 text-white"
+                          : "border-slate-200 bg-white text-slate-700 hover:border-blue-200 hover:bg-blue-50"
+                      }`}
+                    >
+                      {item}
+                    </button>
+                  );
+                })}
               </div>
             </section>
           </div>

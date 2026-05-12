@@ -52,24 +52,29 @@ const TARGET_SEARCH_TERMS: Record<string, string> = {
 
 type SortBy = "end_date_asc" | "start_date_desc" | "similarity_desc" | "scrap_count_desc";
 type ServerSortBy = Exclude<SortBy, "similarity_desc" | "scrap_count_desc">;
-
-const CATEGORY_OPTIONS = [ALL, "주거", "창업", "취업", "교육", "복지", "금융", "문화"] as const;
 const CATEGORY_API_MAP: Record<string, string> = {
-  취업: "인력/일자리",
-  금융: "자금",
+  "ì·¨ì—…": "ì¸ë ¥/ì¼ìžë¦¬",
+  "ê¸ˆìœµ": "ìžê¸ˆ",
 };
-const REGION_OPTIONS = [
-  ALL,
-  "서울특별시",
-  "경기도",
-  "인천광역시",
-  "부산광역시",
-  "대구광역시",
-  "광주광역시",
-  "대전광역시",
-  "울산광역시",
-  "세종특별자치시",
-] as const;
+const CATEGORY_UI_MAP: Record<string, string> = {
+  "ì¸ë ¥/ì¼ìžë¦¬": "ì·¨ì—…",
+  "ìžê¸ˆ": "ê¸ˆìœµ",
+};
+const PENDING_CHAT_PROMPT_KEY = "policyrec-pending-chat-prompt";
+type MainRecommendation = {
+  id: number;
+  title: string;
+  summary: string | null;
+  s_category: string | null;
+  region: string | null;
+  apply_end_dt: string | null;
+  detail_url: string;
+  status?: string;
+  reason?: string;
+};
+
+const CATEGORY_OPTIONS = CATEGORIES;
+const REGION_OPTIONS = REGIONS;
 
 function parseTargetAge(value: string): number | null {
   if (!value.trim()) return null;
@@ -85,8 +90,7 @@ function savedRegionToUi(region: string | undefined): string {
 
 function savedCategoryToUi(category: string | undefined): string {
   if (!category) return ALL;
-  if (category === "인력/일자리") return "취업";
-  if (category === "자금") return "금융";
+  if (CATEGORY_UI_MAP[category]) return CATEGORY_UI_MAP[category];
   return (CATEGORIES as readonly string[]).includes(category) ? category : ALL;
 }
 
@@ -243,6 +247,9 @@ export default function Home() {
   const [authDialogMode, setAuthDialogMode] = useState<"login" | "signup">("login");
   const [recommendPrompt, setRecommendPrompt] = useState<"profile" | "scrap" | null>(null);
   const [highlightFilter, setHighlightFilter] = useState(false);
+  const [mainRecommendations, setMainRecommendations] = useState<MainRecommendation[]>([]);
+  const [mainRecommendationsLoading, setMainRecommendationsLoading] = useState(false);
+  const [mainRecommendationsError, setMainRecommendationsError] = useState<string | null>(null);
 
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
@@ -253,6 +260,7 @@ export default function Home() {
   const autoSaveTimerRef = useRef<number | null>(null);
   const lastSavedTranscriptRef = useRef("");
   const autoFilterReadyRef = useRef(false);
+  const pendingChatPromptHandledRef = useRef(false);
   // 이탈 확인 팝업 — 어떤 액션을 확인 중인지 함께 기억
   // null = 팝업 닫힘 / "new" = 새 채팅 / "logout" = 로그아웃 / restore = 저장 대화 복원
   type LeaveAction = "new" | "logout" | { type: "restore"; chat: SavedChat };
@@ -312,28 +320,64 @@ export default function Home() {
     }
   }, []);
 
+  const loadMainRecommendations = useCallback(async () => {
+    setMainRecommendationsLoading(true);
+    setMainRecommendationsError(null);
+    try {
+      const res = await fetch("/api/mypage/recommendations", { cache: "no-store" });
+      if (!res.ok) {
+        if (res.status === 401) {
+          setMainRecommendations([]);
+          return;
+        }
+        throw new Error(await readApiError(res, "맞춤 추천을 불러오지 못했어요."));
+      }
+      const data = await res.json().catch(() => ({}));
+      setMainRecommendations((data.recommendations ?? []) as MainRecommendation[]);
+    } catch (e) {
+      setMainRecommendations([]);
+      setMainRecommendationsError(
+        e instanceof Error ? e.message : "맞춤 추천을 불러오지 못했어요."
+      );
+    } finally {
+      setMainRecommendationsLoading(false);
+    }
+  }, []);
+
   const loadSession = useCallback(async () => {
     const res = await fetch("/api/auth/me", { cache: "no-store" });
     const data = await res.json().catch(() => ({}));
     setCurrentUser(data.user ?? null);
     setSavedFilter(data.filter ?? null);
     if (data.user) {
-      await Promise.all([loadScraps(), loadSavedChats()]);
+      await Promise.all([loadScraps(), loadSavedChats(), loadMainRecommendations()]);
     } else {
       setScrappedIds(new Set());
       setScrappedItems([]);
       setSavedChats([]);
       setSavedChatsSetupRequired(false);
+      setMainRecommendations([]);
+      setMainRecommendationsError(null);
+      pendingChatPromptHandledRef.current = false;
     }
     if (data.filter_error) {
       setUiMessage(`필터 조회 오류: ${data.filter_error}`);
     }
-  }, [loadSavedChats, loadScraps]);
+  }, [loadMainRecommendations, loadSavedChats, loadScraps]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadSession();
   }, [loadSession]);
+
+  useEffect(() => {
+    if (!currentUser || pendingChatPromptHandledRef.current) return;
+    const pendingPrompt = window.sessionStorage.getItem(PENDING_CHAT_PROMPT_KEY);
+    if (!pendingPrompt) return;
+    pendingChatPromptHandledRef.current = true;
+    window.sessionStorage.removeItem(PENDING_CHAT_PROMPT_KEY);
+    openChatWithPrompt(pendingPrompt);
+  }, [currentUser]);
 
   // 첫 화면 모집중 공고 로드 (검색어 없이 진입 시)
   const loadOpenAnnouncements = useCallback(
@@ -450,6 +494,8 @@ export default function Home() {
     setScrappedItems([]);
     setSavedChats([]);
     setSavedChatsSetupRequired(false);
+    setMainRecommendations([]);
+    setMainRecommendationsError(null);
     setShowScrappedOnly(false);
     setQuery("");
     setFilterCategories([ALL]);
@@ -484,37 +530,49 @@ export default function Home() {
     setChatInput(prompt);
   }
 
+  function moveToProfileFromChat() {
+    const latestUserPrompt = [...chatMessages]
+      .reverse()
+      .find((message) => message.role === "user")?.content;
+    const pendingPrompt =
+      chatInput.trim() ||
+      latestUserPrompt ||
+      "ì €ìž¥ëœ ë‚´ ì •ë³´ë¡œ ë‹¤ì‹œ ì¶”ì²œí•´ì£¼ê³  ì´ìœ ë„ ì•Œë ¤ì¤˜.";
+    window.sessionStorage.setItem(PENDING_CHAT_PROMPT_KEY, pendingPrompt);
+    window.location.href = "/profile";
+  }
+
   function hasSavedProfile() {
     return Boolean(
-      savedFilter?.user_type ||
-        savedFilter?.regions?.length ||
-        savedFilter?.categories?.length ||
-        typeof savedFilter?.target_age === "number"
+      savedFilter?.user_type &&
+      savedFilter?.regions?.length &&
+      savedFilter?.categories?.length &&
+      typeof savedFilter?.target_age === "number"
     );
   }
 
   function requestProfileRecommendation() {
     if (!currentUser) {
-      openAuthDialog("signup");
+      openAuthDialog("login");
       return;
     }
     if (!hasSavedProfile()) {
       setRecommendPrompt("profile");
       return;
     }
-    openChatWithPrompt("내 저장 정보와 스크랩 이력을 바탕으로 지금 신청할 만한 정책을 추천해줘.");
+    openChatWithPrompt("내 저장 정보와 스크랩 이력을 바탕으로 지금 신청할 만한 정책을 추천하고 그 이유를 알려줘.");
   }
 
   function requestScrapRecommendation() {
     if (!currentUser) {
-      openAuthDialog("signup");
+      openAuthDialog("login");
       return;
     }
     if (scrappedIds.size === 0) {
       setRecommendPrompt("scrap");
       return;
     }
-    openChatWithPrompt("내가 스크랩한 정책과 비슷한 정책 중 지금 신청 가능한 공고를 추천해줘.");
+    openChatWithPrompt("내가 스크랩한 정책과 비슷한 정책 중 지금 신청 가능한 공고를 추천해주고 추천 이유도 알려줘.");
   }
 
   async function handleHeaderAuthChange(action: "login" | "signup" | "logout") {
@@ -842,7 +900,7 @@ export default function Home() {
     setUiMessage("현재 필터를 저장했습니다.");
   }
 
-function applySavedFilter() {
+  function applySavedFilter() {
     if (!savedFilter) return;
     setFilterRegion([savedRegionToUi(savedFilter.regions?.[0])]);
     setFilterCategories([savedCategoryToUi(savedFilter.categories?.[0])]);
@@ -901,8 +959,8 @@ function applySavedFilter() {
     try {
       const res = await fetch("/api/search", {
         method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           query: effectiveQuery,
           filter_category: hardFilterCategory,
           filter_region: hardFilterRegion,
@@ -1014,6 +1072,18 @@ function applySavedFilter() {
             ? data.reply
             : "관련 정책을 찾았어요. 아래 후보를 확인해보세요.",
         results: top,
+        ctaLabel:
+          data.intent === "ask_profile"
+            ? currentUser
+              ? "ë‚´ í”„ë¡œí•„ íŽ¸ì§‘"
+              : "ë¡œê·¸ì¸í•˜ê¸°"
+            : undefined,
+        ctaAction:
+          data.intent === "ask_profile"
+            ? currentUser
+              ? "profile"
+              : "login"
+            : undefined,
       };
       setChatMessages((prev) => [...prev, reply]);
     } catch (e) {
@@ -1071,7 +1141,9 @@ function applySavedFilter() {
       <AppHeader currentUser={currentUser} onAuthChange={handleHeaderAuthChange} />
       <main className="mx-auto max-w-[1280px] px-4 py-6 sm:px-6">
         <section className="mb-6 overflow-hidden rounded-[24px] bg-gradient-to-br from-blue-600 to-blue-800 px-5 py-10 text-center text-white shadow-sm sm:px-8 sm:py-12">
-          <h1 className="text-2xl font-bold sm:text-3xl">나에게 맞는 정책을 찾아보세요</h1>
+          <h1 className="text-2xl font-bold leading-tight [word-break:keep-all] sm:text-3xl">
+            나에게 맞는 정책을 찾아보세요
+          </h1>
           <p className="mt-3 text-sm text-blue-100">전국 정책을 한 곳에서 탐색하고 스크랩하세요</p>
           <div className="mx-auto mt-7 flex max-w-2xl items-center gap-2 rounded-2xl bg-white p-2 shadow-lg">
             <span className="pl-3 text-slate-400">⌕</span>
@@ -1113,12 +1185,12 @@ function applySavedFilter() {
           <div className="overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm">
             <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <p className="text-sm font-bold text-blue-600">오늘의 AI 추천</p>
+                <p className="text-sm font-bold text-blue-600">AI 추천 공고</p>
                 <h2 className="mt-2 text-xl font-bold text-slate-950">
                   내 조건에 맞는 정책을 먼저 골라볼까요?
                 </h2>
                 <p className="mt-2 max-w-xl text-sm leading-6 text-slate-600">
-                  지역, 나이, 관심 분야와 스크랩 이력을 바탕으로 지금 확인할 만한 공고를 좁혀드립니다.
+                  지역, 나이, 관심 분야와 스크랩 이력을 바탕으로 추천할 만한 공고를 카드로 보여드려요.
                 </p>
               </div>
               {currentUser ? (
@@ -1132,35 +1204,69 @@ function applySavedFilter() {
               ) : (
                 <button
                   type="button"
-                  onClick={() => openAuthDialog("signup")}
+                  onClick={() => openAuthDialog("login")}
                   className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-blue-700"
                 >
-                  나만의 맞춤 정보 받기
+                  맞춤 정보 확인하기
                 </button>
               )}
             </div>
             <div className="grid gap-3 border-t border-slate-100 bg-slate-50/70 p-4 sm:grid-cols-2">
-              <button
-                type="button"
-                onClick={requestProfileRecommendation}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50"
-              >
-                내 조건 기반
-              </button>
-              <button
-                type="button"
-                onClick={requestScrapRecommendation}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50"
-              >
-                스크랩 취향 반영
-              </button>
+              {currentUser && mainRecommendationsLoading ? (
+                <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-white px-4 py-5 text-sm text-slate-500">
+                  맞춤 추천을 불러오고 있어요.
+                </div>
+              ) : currentUser && mainRecommendations.length > 0 ? (
+                mainRecommendations.slice(0, 3).map((item) => (
+                  <a
+                    key={item.id}
+                    href={item.detail_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left transition hover:border-blue-200 hover:bg-blue-50"
+                  >
+                    <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-blue-600">
+                      <span>{item.s_category ?? "맞춤 정책"}</span>
+                      {item.region && <span className="text-slate-400">· {item.region}</span>}
+                    </div>
+                    <p className="mt-2 line-clamp-2 text-sm font-bold text-slate-900">
+                      {item.title}
+                    </p>
+                    <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">
+                      {item.reason ?? item.summary ?? "내 프로필과 스크랩 이력을 바탕으로 가져온 추천입니다."}
+                    </p>
+                  </a>
+                ))
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={requestProfileRecommendation}
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50"
+                  >
+                    내 조건 기반
+                  </button>
+                  <button
+                    type="button"
+                    onClick={requestScrapRecommendation}
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50"
+                  >
+                    스크랩 취향 반영
+                  </button>
+                </>
+              )}
+              {currentUser && mainRecommendationsError && (
+                <p className="sm:col-span-2 text-xs text-amber-700">
+                  {mainRecommendationsError}
+                </p>
+              )}
             </div>
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <p className="text-sm font-bold text-slate-950">10초 컷 추천</p>
+            <p className="text-sm font-bold text-slate-950">채팅봇 추천</p>
             <p className="mt-2 text-sm leading-6 text-slate-600">
-              정책을 고를 때 더 중요한 기준을 하나만 골라보세요.
+              추천 기준을 고르면 AI봇이 이유까지 함께 설명해드려요.
             </p>
             <div className="mt-4 grid gap-2">
               <button
@@ -1168,14 +1274,14 @@ function applySavedFilter() {
                 onClick={requestProfileRecommendation}
                 className="rounded-xl border border-slate-200 px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50"
               >
-                내 조건에 맞는 정책이 좋아요
+                내 조건에 맞는 공고 물어보기
               </button>
               <button
                 type="button"
                 onClick={requestScrapRecommendation}
                 className="rounded-xl border border-slate-200 px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50"
               >
-                내가 저장한 정책과 비슷하면 좋아요
+                스크랩한 정책과 비슷한 공고 물어보기
               </button>
             </div>
           </div>
@@ -1183,11 +1289,10 @@ function applySavedFilter() {
 
         <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
           <aside
-            className={`h-fit rounded-lg border bg-white shadow-sm transition ${
-              highlightFilter
-                ? "border-blue-400 ring-4 ring-blue-100"
-                : "border-slate-200"
-            }`}
+            className={`h-fit rounded-lg border bg-white shadow-sm transition ${highlightFilter
+              ? "border-blue-400 ring-4 ring-blue-100"
+              : "border-slate-200"
+              }`}
           >
             <div className="flex items-center justify-between border-b border-slate-100 px-4 py-4">
               <h2 className="text-base font-bold text-slate-950">필터</h2>
@@ -1246,14 +1351,14 @@ function applySavedFilter() {
                 />
               </label>
               <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-slate-600">
-                  <input
-                    type="checkbox"
-                    checked={showClosed}
-                    onChange={(e) => setShowClosed(e.target.checked)}
-                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  마감 공고 포함
-                </label>
+                <input
+                  type="checkbox"
+                  checked={showClosed}
+                  onChange={(e) => setShowClosed(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+                마감 공고 포함
+              </label>
 
               <div className="border-t border-slate-100 pt-5">
                 {currentUser && (
@@ -1291,11 +1396,10 @@ function applySavedFilter() {
                         });
                       }}
                       disabled={!showScrappedOnly && scrappedIds.size === 0}
-                      className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                        showScrappedOnly
-                          ? "border-amber-300 bg-amber-100 text-amber-800"
-                          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
-                      }`}
+                      className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${showScrappedOnly
+                        ? "border-amber-300 bg-amber-100 text-amber-800"
+                        : "border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
+                        }`}
                     >
                       {showScrappedOnly ? "전체 결과 보기" : "스크랩만 보기"}
                     </button>
@@ -1310,161 +1414,161 @@ function applySavedFilter() {
 
           <section className="min-w-0">
 
-        {error && (
-          <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
-            <p className="font-semibold">검색을 완료하지 못했어요.</p>
-            <p className="mt-1">{error}</p>
-          </div>
-        )}
-
-        {/* 정렬 토글 — 스크랩만 보기/에러 외에 항상 표시 (키워드 검색은 클라이언트 재정렬) */}
-        {!error && (results.length > 0 || searched) && (
-          <section className="mb-4 rounded-lg border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950">
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-                    {resultHeading}
-                  </h2>
-                </div>
+            {error && (
+              <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+                <p className="font-semibold">검색을 완료하지 못했어요.</p>
+                <p className="mt-1">{error}</p>
               </div>
-              {!showScrappedOnly && results.length > 0 && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                    정렬
-                  </span>
-                  <div className="flex flex-wrap items-center gap-1 rounded-lg border border-zinc-200 bg-zinc-50 p-1 text-sm dark:border-zinc-700 dark:bg-zinc-900">
-                  {canSortBySimilarity && (
-                    <button
-                        type="button"
-                        aria-pressed={sortBy === "similarity_desc"}
-                        title={SORT_DESCRIPTIONS.similarity_desc}
-                        onClick={() => handleSortChange("similarity_desc")}
-                        className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors sm:text-sm ${sortBy === "similarity_desc"
-                          ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                          : "text-zinc-600 hover:bg-white dark:text-zinc-300 dark:hover:bg-zinc-800"
-                          }`}
-                      >
-                        {SORT_LABELS.similarity_desc}
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      aria-pressed={sortBy === "scrap_count_desc"}
-                      title={SORT_DESCRIPTIONS.scrap_count_desc}
-                      onClick={() => handleSortChange("scrap_count_desc")}
-                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors sm:text-sm ${sortBy === "scrap_count_desc"
-                        ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                        : "text-zinc-600 hover:bg-white dark:text-zinc-300 dark:hover:bg-zinc-800"
-                        }`}
-                    >
-                      {SORT_LABELS.scrap_count_desc}
-                    </button>
-                    <button
-                      type="button"
-                      aria-pressed={sortBy === "end_date_asc"}
-                      title={SORT_DESCRIPTIONS.end_date_asc}
-                      onClick={() => handleSortChange("end_date_asc")}
-                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors sm:text-sm ${sortBy === "end_date_asc"
-                        ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                        : "text-zinc-600 hover:bg-white dark:text-zinc-300 dark:hover:bg-zinc-800"
-                        }`}
-                    >
-                      {SORT_LABELS.end_date_asc}
-                    </button>
-                    <button
-                      type="button"
-                      aria-pressed={sortBy === "start_date_desc"}
-                      title={SORT_DESCRIPTIONS.start_date_desc}
-                      onClick={() => handleSortChange("start_date_desc")}
-                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors sm:text-sm ${sortBy === "start_date_desc"
-                        ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                        : "text-zinc-600 hover:bg-white dark:text-zinc-300 dark:hover:bg-zinc-800"
-                        }`}
-                    >
-                      {SORT_LABELS.start_date_desc}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </section>
-        )}
-
-        {searched && !loading && !scrapsLoading && visibleResults.length === 0 && !error && (
-          <div className="rounded-lg border border-dashed border-zinc-300 bg-white px-6 py-14 text-center dark:border-zinc-700 dark:bg-zinc-950">
-            <p className="text-base font-semibold text-zinc-800 dark:text-zinc-100">
-              {showScrappedOnly && currentUser
-                ? "아직 스크랩한 정책이 없어요."
-                : "조건에 맞는 정책을 찾지 못했어요."}
-            </p>
-            <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-zinc-500 dark:text-zinc-400">
-              {showScrappedOnly && currentUser
-                ? "관심 있는 정책 카드에서 스크랩을 눌러두면 여기에서 다시 볼 수 있어요."
-                : "지역이나 카테고리를 전체로 바꾸거나, 검색어를 조금 더 넓게 입력해보세요."}
-            </p>
-            {!showScrappedOnly && (
-              <button
-                type="button"
-                onClick={handleResetFilters}
-                className="mt-5 rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
-              >
-                조건 전체 초기화
-              </button>
             )}
-          </div>
-        )}
 
-        {scrapsLoading && scrappedIds.size > 0 && showScrappedOnly && currentUser && (
-          <div className="rounded-lg border border-zinc-200 bg-white px-6 py-14 text-center text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400">
-            스크랩한 공고를 불러오고 있어요.
-          </div>
-        )}
+            {/* 정렬 토글 — 스크랩만 보기/에러 외에 항상 표시 (키워드 검색은 클라이언트 재정렬) */}
+            {!error && (results.length > 0 || searched) && (
+              <section className="mb-4 rounded-lg border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+                        {resultHeading}
+                      </h2>
+                    </div>
+                  </div>
+                  {!showScrappedOnly && results.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                        정렬
+                      </span>
+                      <div className="flex flex-wrap items-center gap-1 rounded-lg border border-zinc-200 bg-zinc-50 p-1 text-sm dark:border-zinc-700 dark:bg-zinc-900">
+                        {canSortBySimilarity && (
+                          <button
+                            type="button"
+                            aria-pressed={sortBy === "similarity_desc"}
+                            title={SORT_DESCRIPTIONS.similarity_desc}
+                            onClick={() => handleSortChange("similarity_desc")}
+                            className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors sm:text-sm ${sortBy === "similarity_desc"
+                              ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                              : "text-zinc-600 hover:bg-white dark:text-zinc-300 dark:hover:bg-zinc-800"
+                              }`}
+                          >
+                            {SORT_LABELS.similarity_desc}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          aria-pressed={sortBy === "scrap_count_desc"}
+                          title={SORT_DESCRIPTIONS.scrap_count_desc}
+                          onClick={() => handleSortChange("scrap_count_desc")}
+                          className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors sm:text-sm ${sortBy === "scrap_count_desc"
+                            ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                            : "text-zinc-600 hover:bg-white dark:text-zinc-300 dark:hover:bg-zinc-800"
+                            }`}
+                        >
+                          {SORT_LABELS.scrap_count_desc}
+                        </button>
+                        <button
+                          type="button"
+                          aria-pressed={sortBy === "end_date_asc"}
+                          title={SORT_DESCRIPTIONS.end_date_asc}
+                          onClick={() => handleSortChange("end_date_asc")}
+                          className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors sm:text-sm ${sortBy === "end_date_asc"
+                            ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                            : "text-zinc-600 hover:bg-white dark:text-zinc-300 dark:hover:bg-zinc-800"
+                            }`}
+                        >
+                          {SORT_LABELS.end_date_asc}
+                        </button>
+                        <button
+                          type="button"
+                          aria-pressed={sortBy === "start_date_desc"}
+                          title={SORT_DESCRIPTIONS.start_date_desc}
+                          onClick={() => handleSortChange("start_date_desc")}
+                          className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors sm:text-sm ${sortBy === "start_date_desc"
+                            ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                            : "text-zinc-600 hover:bg-white dark:text-zinc-300 dark:hover:bg-zinc-800"
+                            }`}
+                        >
+                          {SORT_LABELS.start_date_desc}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </section>
+            )}
 
-        {/* 첫 화면 모드 로딩/빈 상태 */}
-        {isInitialLoading && (
-          <div className="rounded-lg border border-zinc-200 bg-white px-6 py-14 text-center text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400">
-            지금 신청 가능한 정책을 불러오고 있어요.
-          </div>
-        )}
+            {searched && !loading && !scrapsLoading && visibleResults.length === 0 && !error && (
+              <div className="rounded-lg border border-dashed border-zinc-300 bg-white px-6 py-14 text-center dark:border-zinc-700 dark:bg-zinc-950">
+                <p className="text-base font-semibold text-zinc-800 dark:text-zinc-100">
+                  {showScrappedOnly && currentUser
+                    ? "아직 스크랩한 정책이 없어요."
+                    : "조건에 맞는 정책을 찾지 못했어요."}
+                </p>
+                <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-zinc-500 dark:text-zinc-400">
+                  {showScrappedOnly && currentUser
+                    ? "관심 있는 정책 카드에서 스크랩을 눌러두면 여기에서 다시 볼 수 있어요."
+                    : "지역이나 카테고리를 전체로 바꾸거나, 검색어를 조금 더 넓게 입력해보세요."}
+                </p>
+                {!showScrappedOnly && (
+                  <button
+                    type="button"
+                    onClick={handleResetFilters}
+                    className="mt-5 rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                  >
+                    조건 전체 초기화
+                  </button>
+                )}
+              </div>
+            )}
 
-        {!searched && !browseLoading && results.length === 0 && !error && (
-          <div className="rounded-lg border border-dashed border-zinc-300 bg-white px-6 py-14 text-center dark:border-zinc-700 dark:bg-zinc-950">
-            <p className="text-base font-semibold text-zinc-800 dark:text-zinc-100">
-              현재 모집중인 공고가 없어요.
-            </p>
-            <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-              마감 공고 포함을 켜거나 검색어를 입력해 다시 확인해보세요.
-            </p>
-          </div>
-        )}
+            {scrapsLoading && scrappedIds.size > 0 && showScrappedOnly && currentUser && (
+              <div className="rounded-lg border border-zinc-200 bg-white px-6 py-14 text-center text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400">
+                스크랩한 공고를 불러오고 있어요.
+              </div>
+            )}
 
-        <ul className="space-y-4">
-          {visibleResults.map((r) => (
-            <PolicyCard
-              key={r.id}
-              item={r}
-              canScrap={Boolean(currentUser)}
-              isScrapped={scrappedIds.has(r.id)}
-              onToggleScrap={toggleScrap}
-              showSimilarityScore={isAdmin}
-            />
-          ))}
-        </ul>
+            {/* 첫 화면 모드 로딩/빈 상태 */}
+            {isInitialLoading && (
+              <div className="rounded-lg border border-zinc-200 bg-white px-6 py-14 text-center text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400">
+                지금 신청 가능한 정책을 불러오고 있어요.
+              </div>
+            )}
 
-        {/* 더 보기 버튼 — 첫 화면 모드 + 필터-only 검색 모드에서 표시 */}
-        {browseHasMore && !showScrappedOnly && !error && (
-          <div className="mt-7 flex justify-center">
-            <button
-              type="button"
-              onClick={handleLoadMore}
-              disabled={browseLoading || loading}
-              className="rounded-md border border-zinc-300 bg-white px-6 py-2.5 text-sm font-semibold text-zinc-700 transition-colors hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
-            >
-              {(browseLoading || loading) ? "더 불러오는 중..." : "정책 더 보기"}
-            </button>
-          </div>
-        )}
+            {!searched && !browseLoading && results.length === 0 && !error && (
+              <div className="rounded-lg border border-dashed border-zinc-300 bg-white px-6 py-14 text-center dark:border-zinc-700 dark:bg-zinc-950">
+                <p className="text-base font-semibold text-zinc-800 dark:text-zinc-100">
+                  현재 모집중인 공고가 없어요.
+                </p>
+                <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+                  마감 공고 포함을 켜거나 검색어를 입력해 다시 확인해보세요.
+                </p>
+              </div>
+            )}
+
+            <ul className="space-y-4">
+              {visibleResults.map((r) => (
+                <PolicyCard
+                  key={r.id}
+                  item={r}
+                  canScrap={Boolean(currentUser)}
+                  isScrapped={scrappedIds.has(r.id)}
+                  onToggleScrap={toggleScrap}
+                  showSimilarityScore={isAdmin}
+                />
+              ))}
+            </ul>
+
+            {/* 더 보기 버튼 — 첫 화면 모드 + 필터-only 검색 모드에서 표시 */}
+            {browseHasMore && !showScrappedOnly && !error && (
+              <div className="mt-7 flex justify-center">
+                <button
+                  type="button"
+                  onClick={handleLoadMore}
+                  disabled={browseLoading || loading}
+                  className="rounded-md border border-zinc-300 bg-white px-6 py-2.5 text-sm font-semibold text-zinc-700 transition-colors hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                >
+                  {(browseLoading || loading) ? "더 불러오는 중..." : "정책 더 보기"}
+                </button>
+              </div>
+            )}
 
           </section>
         </div>
@@ -1554,6 +1658,8 @@ function applySavedFilter() {
             onDeleteSavedChat={deleteSavedChat}
             onNewChat={requestNewChat}
             onRestoreChat={requestRestoreChat}
+            onProfileAction={moveToProfileFromChat}
+            onLoginAction={() => openAuthDialog("login")}
           />
         </div>
       )}
@@ -1676,11 +1782,10 @@ function MultiChipFilter({
               key={option}
               type="button"
               onClick={() => onChange(toggleMultiValue([...normalizedValues], option, options))}
-              className={`rounded-full border px-3 py-2 text-sm font-semibold transition ${
-                active
-                  ? "border-blue-600 bg-blue-600 text-white"
-                  : "border-slate-200 bg-white text-slate-600 hover:border-blue-200 hover:bg-blue-50"
-              }`}
+              className={`rounded-full border px-3 py-2 text-sm font-semibold transition ${active
+                ? "border-blue-600 bg-blue-600 text-white"
+                : "border-slate-200 bg-white text-slate-600 hover:border-blue-200 hover:bg-blue-50"
+                }`}
             >
               {option}
             </button>
@@ -1709,6 +1814,8 @@ function ChatPanel({
   onDeleteSavedChat,
   onNewChat,
   onRestoreChat,
+  onProfileAction,
+  onLoginAction,
 }: {
   messages: ChatMessage[];
   input: string;
@@ -1727,6 +1834,8 @@ function ChatPanel({
   onDeleteSavedChat: (id: number) => void;
   onNewChat: () => void;
   onRestoreChat: (chat: SavedChat) => void;
+  onProfileAction: () => void;
+  onLoginAction: () => void;
 }) {
   const [showSavedChats, setShowSavedChats] = useState(false);
   // 빈 대화 상태 안내 분기용 — 저장된 필터 요약
@@ -1785,164 +1894,178 @@ function ChatPanel({
       </div>
 
       {!showSavedChats && (
-      <div className="flex flex-wrap gap-2 border-b border-zinc-200 px-4 py-2 dark:border-zinc-700">
-        <button
-          type="button"
-          onClick={() => {
-            setShowSavedChats(false);
-            onNewChat();
-          }}
-          disabled={messages.length === 0 && !input.trim()}
-          className="rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-        >
-          새 채팅 시작
-        </button>
-        {!currentUser && (
-          <span className="self-center text-[11px] text-zinc-500">
-            로그인하면 저장 가능
-          </span>
-        )}
-      </div>
+        <div className="flex flex-wrap gap-2 border-b border-zinc-200 px-4 py-2 dark:border-zinc-700">
+          <button
+            type="button"
+            onClick={() => {
+              setShowSavedChats(false);
+              onNewChat();
+            }}
+            disabled={messages.length === 0 && !input.trim()}
+            className="rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          >
+            새 채팅 시작
+          </button>
+          {!currentUser && (
+            <span className="self-center text-[11px] text-zinc-500">
+              로그인하면 저장 가능
+            </span>
+          )}
+        </div>
       )}
 
       {showSavedChats && (
         <div className="flex-1 overflow-y-auto bg-zinc-50 p-4 dark:bg-zinc-900">
-            {!currentUser ? (
-              <p className="text-xs text-zinc-500">로그인하면 저장 목록을 볼 수 있어요.</p>
-            ) : savedChatsSetupRequired ? (
-              <p className="text-xs leading-5 text-amber-700 dark:text-amber-300">
-                저장 대화 접근 확인이 필요합니다. Supabase에서 chat_history 테이블과
-                스키마 캐시 갱신 여부를 확인해주세요.
-              </p>
-            ) : savedChatsLoading ? (
-              <p className="text-xs text-zinc-500">불러오는 중...</p>
-            ) : savedChats.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-zinc-300 bg-white p-6 text-center text-sm text-zinc-500">
-                아직 저장한 대화가 없습니다.
-              </div>
-            ) : (
-              <ul className="space-y-2">
-                {savedChats.map((chat) => (
-                  <li
-                    key={chat.id}
-                    onClick={() => {
-                      setShowSavedChats(false);
-                      onRestoreChat(chat);
-                    }}
-                    className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-left shadow-sm dark:border-zinc-700 dark:bg-zinc-950"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                        {chat.title ?? chat.content.slice(0, 40)}
-                      </p>
-                      <time className="text-[11px] text-zinc-400">
-                        {formatSavedChatDate(chat.created_dt)}
-                      </time>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onDeleteSavedChat(chat.id);
-                        }}
-                        className="rounded px-2 py-1 text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
-                      >
-                        삭제
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
+          {!currentUser ? (
+            <p className="text-xs text-zinc-500">로그인하면 저장 목록을 볼 수 있어요.</p>
+          ) : savedChatsSetupRequired ? (
+            <p className="text-xs leading-5 text-amber-700 dark:text-amber-300">
+              저장 대화 접근 확인이 필요합니다. Supabase에서 chat_history 테이블과
+              스키마 캐시 갱신 여부를 확인해주세요.
+            </p>
+          ) : savedChatsLoading ? (
+            <p className="text-xs text-zinc-500">불러오는 중...</p>
+          ) : savedChats.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-zinc-300 bg-white p-6 text-center text-sm text-zinc-500">
+              아직 저장한 대화가 없습니다.
+            </div>
+          ) : (
+            <ul className="space-y-2">
+              {savedChats.map((chat) => (
+                <li
+                  key={chat.id}
+                  onClick={() => {
+                    setShowSavedChats(false);
+                    onRestoreChat(chat);
+                  }}
+                  className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-left shadow-sm dark:border-zinc-700 dark:bg-zinc-950"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                      {chat.title ?? chat.content.slice(0, 40)}
+                    </p>
+                    <time className="text-[11px] text-zinc-400">
+                      {formatSavedChatDate(chat.created_dt)}
+                    </time>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onDeleteSavedChat(chat.id);
+                      }}
+                      className="rounded px-2 py-1 text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-950"
+                    >
+                      삭제
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
       {!showSavedChats && (
-      <div className="flex-1 overflow-y-auto p-4">
-        {messages.length === 0 && !loading && (
-          <div className="space-y-3">
-            {currentUser && hasSavedFilter ? (
-              <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200">
-                <p className="font-medium">
-                  저장된 조건을 바탕으로 추천을 시작합니다.
-                </p>
-                <p className="mt-1 text-xs text-blue-800 dark:text-blue-300">
-                  {savedFilterParts.join(" · ")}
-                </p>
-                <p className="mt-2 text-xs">
-                  예: 지금 신청 가능한 정책 3개만 골라줘.
-                </p>
-              </div>
-            ) : currentUser ? (
-              <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
-                <p className="font-medium">추천에 필요한 조건을 알려주세요.</p>
-                <p className="mt-1 text-xs">
-                  지역, 나이, 관심 분야, 현재 상황을 함께 적으면 더 정확하게 좁혀드릴게요.
-                </p>
-              </div>
-            ) : (
-              <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
-                <p className="font-medium">상황을 한 문장으로 적어주세요.</p>
-                <p className="mt-1 text-xs">
-                  예: 서울 거주 25살 예비창업자인데 자금 지원을 찾고 있어요.
-                </p>
-              </div>
-            )}
-            <p className="px-1 text-xs text-zinc-500">
-              다른 예: &quot;청년 창업 지원&quot;, &quot;충남 청년 주거&quot;, &quot;구직자 교육 지원&quot;
-            </p>
-          </div>
-        )}
-
-        <ul className="space-y-4">
-          {messages.map((msg, idx) => (
-            <li
-              key={idx}
-              className={
-                msg.role === "user" ? "flex justify-end" : "flex gap-2"
-              }
-            >
-              {msg.role === "assistant" && (
-                <Image
-                  src="/chatbot_icon.png"
-                  alt=""
-                  width={28}
-                  height={28}
-                  className="h-7 w-7 shrink-0 rounded-full border border-zinc-200 bg-white object-cover dark:border-zinc-700"
-                />
-              )}
-              {msg.role === "user" ? (
-                <div className="max-w-[80%] whitespace-pre-wrap break-words rounded-2xl bg-blue-600 px-4 py-2 text-sm text-white">
-                  {msg.content}
+        <div className="flex-1 overflow-y-auto p-4">
+          {messages.length === 0 && !loading && (
+            <div className="space-y-3">
+              {currentUser && hasSavedFilter ? (
+                <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200">
+                  <p className="font-medium">
+                    저장된 조건을 바탕으로 추천을 시작합니다.
+                  </p>
+                  <p className="mt-1 text-xs text-blue-800 dark:text-blue-300">
+                    {savedFilterParts.join(" · ")}
+                  </p>
+                  <p className="mt-2 text-xs">
+                    예: 지금 신청 가능한 정책 3개만 골라줘.
+                  </p>
+                </div>
+              ) : currentUser ? (
+                <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+                  <p className="font-medium">추천에 필요한 조건을 알려주세요.</p>
+                  <p className="mt-1 text-xs">
+                    지역, 나이, 관심 분야, 현재 상황을 함께 적으면 더 정확하게 좁혀드릴게요.
+                  </p>
                 </div>
               ) : (
-                <div className="min-w-0 flex-1">
-                  <p className="whitespace-pre-wrap break-words text-sm text-zinc-700 dark:text-zinc-300">
-                    {msg.content}
+                <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+                  <p className="font-medium">상황을 한 문장으로 적어주세요.</p>
+                  <p className="mt-1 text-xs">
+                    예: 서울 거주 25살 예비창업자인데 자금 지원을 찾고 있어요.
                   </p>
-                  {msg.results && msg.results.length > 0 && (
-                    <ul className="mt-3 space-y-3">
-                      {msg.results.map((r) => (
-                        <PolicyCard
-                          key={r.id}
-                          item={r}
-                          canScrap={Boolean(currentUser)}
-                          isScrapped={scrappedIds.has(r.id)}
-                          onToggleScrap={onToggleScrap}
-                          showSimilarityScore={currentUser?.role === "admin"}
-                        />
-                      ))}
-                    </ul>
-                  )}
                 </div>
               )}
-            </li>
-          ))}
-        </ul>
+              <p className="px-1 text-xs text-zinc-500">
+                다른 예: &quot;청년 창업 지원&quot;, &quot;충남 청년 주거&quot;, &quot;구직자 교육 지원&quot;
+              </p>
+            </div>
+          )}
 
-        {loading && <p className="mt-3 text-sm text-zinc-500">답변 생성 중...</p>}
-      </div>
+          <ul className="space-y-4">
+            {messages.map((msg, idx) => (
+              <li
+                key={idx}
+                className={
+                  msg.role === "user" ? "flex justify-end" : "flex gap-2"
+                }
+              >
+                {msg.role === "assistant" && (
+                  <Image
+                    src="/chatbot_icon.png"
+                    alt=""
+                    width={28}
+                    height={28}
+                    className="h-7 w-7 shrink-0 rounded-full border border-zinc-200 bg-white object-cover dark:border-zinc-700"
+                  />
+                )}
+                {msg.role === "user" ? (
+                  <div className="max-w-[80%] whitespace-pre-wrap break-words rounded-2xl bg-blue-600 px-4 py-2 text-sm text-white">
+                    {msg.content}
+                  </div>
+                ) : (
+                  <div className="min-w-0 flex-1">
+                    <div className="rounded-2xl bg-blue-50 px-4 py-3 text-sm text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+                      <p className="mb-1 text-xs font-semibold text-blue-700 dark:text-blue-300">
+                        ì¶”ì²œ ì´ìœ 
+                      </p>
+                      <p className="whitespace-pre-wrap break-words">
+                        {msg.content}
+                      </p>
+                      {msg.ctaLabel && (
+                        <button
+                          type="button"
+                          onClick={msg.ctaAction === "profile" ? onProfileAction : onLoginAction}
+                          className="mt-3 rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100 dark:border-blue-800 dark:bg-zinc-950 dark:text-blue-300"
+                        >
+                          {msg.ctaLabel}
+                        </button>
+                      )}
+                    </div>
+                    {msg.results && msg.results.length > 0 && (
+                      <ul className="mt-3 space-y-3">
+                        {msg.results.map((r) => (
+                          <PolicyCard
+                            key={r.id}
+                            item={r}
+                            canScrap={Boolean(currentUser)}
+                            isScrapped={scrappedIds.has(r.id)}
+                            onToggleScrap={onToggleScrap}
+                            showSimilarityScore={currentUser?.role === "admin"}
+                          />
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+
+          {loading && <p className="mt-3 text-sm text-zinc-500">답변 생성 중...</p>}
+        </div>
       )}
 
       {!showSavedChats && error && (
@@ -1950,32 +2073,32 @@ function ChatPanel({
       )}
 
       {!showSavedChats && (
-      <div className="border-t border-zinc-200 p-3 dark:border-zinc-700">
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                onSend();
-              }
-            }}
-            placeholder="예: 청년 창업 지원"
-            disabled={loading}
-            className="min-w-0 flex-1 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900"
-          />
-          <button
-            type="button"
-            onClick={onSend}
-            disabled={loading || !input.trim()}
-            className="rounded-lg bg-zinc-900 px-3 py-2 text-sm text-white transition-colors hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-          >
-            {loading ? "답변 생성 중..." : "전송"}
-          </button>
+        <div className="border-t border-zinc-200 p-3 dark:border-zinc-700">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  onSend();
+                }
+              }}
+              placeholder="예: 청년 창업 지원"
+              disabled={loading}
+              className="min-w-0 flex-1 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900"
+            />
+            <button
+              type="button"
+              onClick={onSend}
+              disabled={loading || !input.trim()}
+              className="rounded-lg bg-zinc-900 px-3 py-2 text-sm text-white transition-colors hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+            >
+              {loading ? "답변 생성 중..." : "전송"}
+            </button>
+          </div>
         </div>
-      </div>
       )}
 
       <div className="grid grid-cols-2 border-t border-zinc-200 bg-white text-xs font-semibold text-zinc-500 dark:border-zinc-700 dark:bg-zinc-950">
