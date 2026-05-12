@@ -50,16 +50,16 @@ const TARGET_SEARCH_TERMS: Record<string, string> = {
   기업: "기업 지원 사업",
 };
 
-type SortBy = "end_date_asc" | "start_date_desc" | "similarity_desc" | "scrap_count_desc";
-type ServerSortBy = Exclude<SortBy, "similarity_desc" | "scrap_count_desc">;
 const CATEGORY_API_MAP: Record<string, string> = {
-  "ì·¨ì—…": "ì¸ë ¥/ì¼ìžë¦¬",
-  "ê¸ˆìœµ": "ìžê¸ˆ",
+  "취업": "인력/일자리",
+  "금융": "자금",
 };
+
 const CATEGORY_UI_MAP: Record<string, string> = {
-  "ì¸ë ¥/ì¼ìžë¦¬": "ì·¨ì—…",
-  "ìžê¸ˆ": "ê¸ˆìœµ",
+  "인력/일자리": "취업",
+  "자금": "금융",
 };
+
 const PENDING_CHAT_PROMPT_KEY = "policyrec-pending-chat-prompt";
 type MainRecommendation = {
   id: number;
@@ -2029,7 +2029,7 @@ function ChatPanel({
                   <div className="min-w-0 flex-1">
                     <div className="rounded-2xl bg-blue-50 px-4 py-3 text-sm text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
                       <p className="mb-1 text-xs font-semibold text-blue-700 dark:text-blue-300">
-                        ì¶”ì²œ ì´ìœ 
+                        ì¶”ì²œ ì´ìœ
                       </p>
                       <p className="whitespace-pre-wrap break-words">
                         {msg.content}
