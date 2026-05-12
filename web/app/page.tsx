@@ -50,11 +50,16 @@ const TARGET_SEARCH_TERMS: Record<string, string> = {
   기업: "기업 지원 사업",
 };
 
+type SortBy = "recommended_desc" | "end_date_asc" | "start_date_desc"; // ☑️수정: 스크랩 많은 순(scrap_count_desc) 제거
+type ServerSortBy = Exclude<SortBy, "recommended_desc">; // ☑️수정: 서버 정렬 파라미터에는 마감순/최신순만 전달
+
+// ☑️수정: 깨진 한글 카테고리 매핑 복구
 const CATEGORY_API_MAP: Record<string, string> = {
   "취업": "인력/일자리",
   "금융": "자금",
 };
 
+// ☑️수정: DB/API 카테고리명을 UI 카테고리명으로 되돌릴 때 사용
 const CATEGORY_UI_MAP: Record<string, string> = {
   "인력/일자리": "취업",
   "자금": "금융",
@@ -173,11 +178,14 @@ function sortResultsClientSide(
   sortBy: SortBy
 ): SearchResult[] {
   const copy = [...results];
-  if (sortBy === "similarity_desc") {
-    copy.sort((a, b) => b.similarity - a.similarity);
-  } else if (sortBy === "scrap_count_desc") {
-    copy.sort((a, b) => (b.scrap_count ?? 0) - (a.scrap_count ?? 0));
-  } else if (sortBy === "end_date_asc") {
+
+  // ☑️수정: 추천순은 서버에서 이미 리랭킹된 순서이므로 클라이언트에서 재정렬하지 않음
+  if (sortBy === "recommended_desc") {
+    return copy;
+  }
+
+  // ☑️수정: 스크랩 많은 순(scrap_count_desc) 제거
+  if (sortBy === "end_date_asc") {
     // 마감 임박순: apply_end_dt 오름차순. null/빈값은 뒤로
     copy.sort((a, b) => {
       const aEnd = a.apply_end_dt || "9999-12-31";
@@ -189,34 +197,56 @@ function sortResultsClientSide(
     copy.sort((a, b) => {
       const aStart = a.apply_start_dt || "";
       const bStart = b.apply_start_dt || "";
-      // 빈값은 뒤로
       if (!aStart && !bStart) return 0;
       if (!aStart) return 1;
       if (!bStart) return -1;
       return bStart.localeCompare(aStart);
     });
   }
+
   return copy;
 }
 
 function toServerSortBy(sortBy: SortBy): ServerSortBy {
-  return sortBy === "similarity_desc" || sortBy === "scrap_count_desc"
-    ? "end_date_asc"
-    : sortBy;
+  // ☑️수정: 추천순은 서버 sort_by 값이 아니므로 기본 서버 정렬값으로 변환
+  return sortBy === "recommended_desc" ? "end_date_asc" : sortBy;
+}
+
+function buildRecommendationQueryFromFilters({
+  selectedCategories,
+  selectedRegions,
+  selectedTargets,
+  targetAge,
+  userType,
+}: {
+  selectedCategories: string[];
+  selectedRegions: string[];
+  selectedTargets: string[];
+  targetAge: number | null;
+  userType?: string | null;
+}): string {
+  const signals = [
+    ...selectedRegions,
+    ...selectedCategories.map((category) => CATEGORY_API_MAP[category] ?? category),
+    ...selectedTargets.map((target) => TARGET_SEARCH_TERMS[target] ?? target),
+    userType ?? "",
+    targetAge !== null ? `${targetAge}세` : "",
+  ].filter(Boolean);
+
+  if (signals.length === 0) return "";
+  return Array.from(new Set([...signals, "맞춤 정책 추천"])).join(" ");
 }
 
 const SORT_LABELS: Record<SortBy, string> = {
+  recommended_desc: "추천순", // ☑️수정: 기존 "유사도 순" 대신 서버 리랭킹 순서를 의미하는 라벨 사용
   end_date_asc: "마감 가까운 순",
   start_date_desc: "새로 올라온 순",
-  similarity_desc: "유사도 순",
-  scrap_count_desc: "스크랩 많은 순",
 };
 
 const SORT_DESCRIPTIONS: Record<SortBy, string> = {
+  recommended_desc: "검색어와 조건을 함께 반영한 추천 순서로 보여드려요.", // ☑️수정
   end_date_asc: "신청 마감이 빠른 정책부터 보여드려요.",
   start_date_desc: "최근 등록된 정책부터 보여드려요.",
-  similarity_desc: "나와 더 잘 맞는 정책부터 보여드려요.",
-  scrap_count_desc: "현재 불러온 결과 안에서 스크랩이 많은 정책부터 보여드려요.",
 };
 
 export default function Home() {
@@ -444,19 +474,33 @@ export default function Home() {
   }, [filterCategories, filterRegion, filterTargets, filterAge, filterStatus, showClosed]);
 
   function handleSortChange(next: SortBy) {
-    if (next === sortBy) return;
+    if (next === sortBy && next !== "recommended_desc") return;
     setSortBy(next);
-    if (next === "similarity_desc" || next === "scrap_count_desc") {
-      if (!searched || lastSearchQuery === "") return;
-      setResults((prev) => sortResultsClientSide(prev, next));
+
+    // ☑️수정: 추천순 버튼은 항상 선택 가능하게 유지
+    // - 검색어가 있는 검색 결과: /api/search를 다시 호출해 서버 리랭킹 순서로 복원
+    // - 검색어가 없는 필터-only/첫 화면 결과: 이미 받은 순서를 그대로 유지
+    if (next === "recommended_desc") {
+      if (!searched) {
+        void handleSearch({
+          sortOverride: toServerSortBy(next),
+          preferredSort: "recommended_desc",
+        });
+        return;
+      }
+      void handleSearch({
+        sortOverride: toServerSortBy(next),
+        preferredSort: "recommended_desc",
+      });
       return;
     }
+
     if (searched) {
       if (lastSearchQuery === "") {
         // 필터-only 검색 모드: handleSearch 다시 호출 (서버 정렬)
         void handleSearch({ sortOverride: next });
       } else {
-        // 키워드 검색 모드: 클라이언트에서 재정렬 (similarity 결과 10개를 정렬)
+        // ☑️수정: 키워드 검색 모드에서도 유사도순은 제거하고, 선택한 정렬만 클라이언트에서 적용
         setResults((prev) => sortResultsClientSide(prev, next));
       }
     } else {
@@ -913,6 +957,7 @@ export default function Home() {
 
   async function handleSearch(options?: {
     sortOverride?: ServerSortBy;
+    preferredSort?: SortBy;
     appendOffset?: number; // 더보기용. 지정 시 append 모드
   }) {
     const trimmed = query.trim();
@@ -920,21 +965,54 @@ export default function Home() {
     const selectedRegions = filterRegion.filter((value) => value !== ALL);
     const selectedStatuses = filterStatus.filter((value) => value !== ALL);
     const selectedTargets = filterTargets.filter((value) => value !== ALL);
+    const preferredSort = options?.preferredSort ?? sortBy;
+    const savedCategories =
+      currentUser && savedFilter?.categories
+        ? savedFilter.categories.filter((value): value is string => Boolean(value))
+        : [];
+    const savedRegions =
+      currentUser && savedFilter?.regions
+        ? savedFilter.regions.filter((value): value is string => Boolean(value && value !== "전국"))
+        : [];
+    const savedTargetAge =
+      currentUser && typeof savedFilter?.target_age === "number"
+        ? savedFilter.target_age
+        : null;
     const categorySearchTerm =
       selectedCategories.length > 1 ? selectedCategories.join(" ") : "";
     const regionSearchTerm = selectedRegions.length > 1 ? selectedRegions.join(" ") : "";
     const targetSearchTerm = selectedTargets
       .map((target) => TARGET_SEARCH_TERMS[target] ?? target)
       .join(" ");
+    const selectedTargetAge = parseTargetAge(filterAge);
+    const targetAge =
+      selectedTargetAge ??
+      (preferredSort === "recommended_desc" ? savedTargetAge : null);
     const hardFilterCategory =
       selectedCategories.length === 1
         ? CATEGORY_API_MAP[selectedCategories[0]] ?? selectedCategories[0]
-        : ALL;
-    const hardFilterRegion = selectedRegions.length === 1 ? selectedRegions[0] : ALL;
-    const effectiveQuery = [trimmed, categorySearchTerm, regionSearchTerm, targetSearchTerm]
+        : preferredSort === "recommended_desc" && savedCategories.length === 1
+          ? CATEGORY_API_MAP[savedCategories[0]] ?? savedCategories[0]
+          : ALL;
+    const hardFilterRegion =
+      selectedRegions.length === 1
+        ? selectedRegions[0]
+        : preferredSort === "recommended_desc" && savedRegions.length === 1
+          ? savedRegions[0]
+          : ALL;
+    let effectiveQuery = [trimmed, categorySearchTerm, regionSearchTerm, targetSearchTerm]
       .filter(Boolean)
       .join(" ");
-    const targetAge = parseTargetAge(filterAge);
+
+    if (preferredSort === "recommended_desc" && effectiveQuery === "") {
+      effectiveQuery = buildRecommendationQueryFromFilters({
+        selectedCategories: selectedCategories.length > 0 ? selectedCategories : savedCategories,
+        selectedRegions: selectedRegions.length > 0 ? selectedRegions : savedRegions,
+        selectedTargets,
+        targetAge,
+        userType: currentUser ? savedFilter?.user_type : null,
+      });
+    }
 
     const isAppend = options?.appendOffset !== undefined;
     const effectiveSortBy: ServerSortBy =
@@ -944,7 +1022,7 @@ export default function Home() {
     // (마감 포함 조회를 원하는 경우: 모집상태=마감 또는 showClosed=true)
     const includeOnlyOpen =
       effectiveQuery === "" && !selectedStatuses.includes("마감") && !showClosed;
-    if (filterAge.trim() && targetAge === null) {
+    if (filterAge.trim() && selectedTargetAge === null) {
       setError("나이는 0~120 사이의 숫자로 입력해주세요.");
       return;
     }
@@ -965,7 +1043,7 @@ export default function Home() {
           filter_category: hardFilterCategory,
           filter_region: hardFilterRegion,
           user_age: targetAge,
-          // 검색어 없을 때만 정렬/페이지네이션 적용 (키워드 검색은 similarity 정렬 + 10개 고정)
+          // ☑️수정: 검색어 없을 때만 정렬/페이지네이션 적용 (키워드 검색은 서버 리랭킹 순서 사용)
           ...(effectiveQuery === "" && {
             sort_by: effectiveSortBy,
             offset: effectiveOffset,
@@ -989,11 +1067,17 @@ export default function Home() {
       if (effectiveQuery === "") {
         setBrowseHasMore(Boolean(data.hasMore));
         setBrowseOffset(effectiveOffset + newResults.length);
-        if (!isAppend) setSortBy(options?.sortOverride ?? effectiveSortBy);
+        if (!isAppend) {
+          setSortBy(
+            options?.preferredSort === "recommended_desc"
+              ? effectiveSortBy
+              : options?.preferredSort ?? options?.sortOverride ?? effectiveSortBy
+          );
+        }
       } else {
         setBrowseHasMore(false);
         setBrowseOffset(0);
-        if (!isAppend) setSortBy("similarity_desc");
+        if (!isAppend) setSortBy("recommended_desc"); // ☑️수정: 검색 직후에는 서버 리랭킹 순서인 추천순으로 표시
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "알 수 없는 오류");
@@ -1135,7 +1219,28 @@ export default function Home() {
       : "지금 신청 가능한 정책";
   const isInitialLoading = !searched && browseLoading && results.length === 0;
   const isAdmin = currentUser?.role === "admin";
-  const canSortBySimilarity = searched && lastSearchQuery !== "";
+  const hasSearchQueryForRecommendation =
+    query.trim().length > 0 || lastSearchQuery.trim().length > 0;
+  const hasFilterForRecommendation =
+    filterCategories.some((value) => value !== ALL) ||
+    filterRegion.some((value) => value !== ALL) ||
+    filterTargets.some((value) => value !== ALL) ||
+    filterAge.trim().length > 0;
+  const hasSavedProfileForRecommendation = Boolean(
+    currentUser &&
+    (
+      savedFilter?.user_type ||
+      savedFilter?.categories?.some(Boolean) ||
+      savedFilter?.regions?.some((value) => Boolean(value && value !== "전국")) ||
+      typeof savedFilter?.target_age === "number"
+    )
+  );
+  const canSortByRecommended =
+    !showScrappedOnly &&
+    results.length > 0 &&
+    (hasSearchQueryForRecommendation ||
+      hasFilterForRecommendation ||
+      hasSavedProfileForRecommendation);
   return (
     <div className="min-h-screen bg-slate-50 text-slate-950">
       <AppHeader currentUser={currentUser} onAuthChange={handleHeaderAuthChange} />
@@ -1187,7 +1292,7 @@ export default function Home() {
               <div>
                 <p className="text-sm font-bold text-blue-600">AI 추천 공고</p>
                 <h2 className="mt-2 text-xl font-bold text-slate-950">
-                  내 조건에 맞는 정책을 먼저 골라볼까요?
+                  조건을 설정하면, 내 조건에 맞는 정책을 추천해드려요!
                 </h2>
                 <p className="mt-2 max-w-xl text-sm leading-6 text-slate-600">
                   지역, 나이, 관심 분야와 스크랩 이력을 바탕으로 추천할 만한 공고를 카드로 보여드려요.
@@ -1199,7 +1304,7 @@ export default function Home() {
                   onClick={requestProfileRecommendation}
                   className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-blue-700"
                 >
-                  AI에게 추천받기
+                  AI 추천
                 </button>
               ) : (
                 <button
@@ -1421,7 +1526,7 @@ export default function Home() {
               </div>
             )}
 
-            {/* 정렬 토글 — 스크랩만 보기/에러 외에 항상 표시 (키워드 검색은 클라이언트 재정렬) */}
+            {/* ☑️수정: 정렬 토글 — 추천순/마감순/새 공고순만 표시 */}
             {!error && (results.length > 0 || searched) && (
               <section className="mb-4 rounded-lg border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -1438,32 +1543,20 @@ export default function Home() {
                         정렬
                       </span>
                       <div className="flex flex-wrap items-center gap-1 rounded-lg border border-zinc-200 bg-zinc-50 p-1 text-sm dark:border-zinc-700 dark:bg-zinc-900">
-                        {canSortBySimilarity && (
+                        {canSortByRecommended && (
                           <button
                             type="button"
-                            aria-pressed={sortBy === "similarity_desc"}
-                            title={SORT_DESCRIPTIONS.similarity_desc}
-                            onClick={() => handleSortChange("similarity_desc")}
-                            className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors sm:text-sm ${sortBy === "similarity_desc"
+                            aria-pressed={sortBy === "recommended_desc"}
+                            title={SORT_DESCRIPTIONS.recommended_desc}
+                            onClick={() => handleSortChange("recommended_desc")}
+                            className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors sm:text-sm ${sortBy === "recommended_desc"
                               ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
                               : "text-zinc-600 hover:bg-white dark:text-zinc-300 dark:hover:bg-zinc-800"
                               }`}
                           >
-                            {SORT_LABELS.similarity_desc}
+                            {SORT_LABELS.recommended_desc}
                           </button>
                         )}
-                        <button
-                          type="button"
-                          aria-pressed={sortBy === "scrap_count_desc"}
-                          title={SORT_DESCRIPTIONS.scrap_count_desc}
-                          onClick={() => handleSortChange("scrap_count_desc")}
-                          className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors sm:text-sm ${sortBy === "scrap_count_desc"
-                            ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                            : "text-zinc-600 hover:bg-white dark:text-zinc-300 dark:hover:bg-zinc-800"
-                            }`}
-                        >
-                          {SORT_LABELS.scrap_count_desc}
-                        </button>
                         <button
                           type="button"
                           aria-pressed={sortBy === "end_date_asc"}
