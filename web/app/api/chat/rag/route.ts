@@ -18,79 +18,22 @@ import {
   cleanTargetGroup,
   normalizeApplicationDetails,
 } from "@/lib/policy-normalization";
+import { ALL_OPTION, CATEGORIES, REGIONS } from "@/lib/profile-options";
 import { supabase } from "@/lib/supabase";
 import { recruitmentStatus } from "@/lib/utils";
 
-// 로그인 사용자의 저장된 필터를 챗봇 컨텍스트로 변환
-async function loadUserContext(
-  request: NextRequest
-): Promise<RagUserContext | undefined> {
-  const loginId = getLoginIdFromRequest(request);
-  if (!loginId) return undefined;
-
-  const [filterResult, userInfoResult] = await Promise.all([
-    supabase
-      .from("user_filters")
-      .select("regions,categories,target_age")
-      .eq("login_id", loginId)
-      .order("created_dt", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    supabase
-      .from("user_info")
-      .select("region,regions,categories,age_group,user_type")
-      .eq("login_id", loginId)
-      .maybeSingle(),
-  ]);
-
-  const filter = filterResult.data;
-  const userInfo = userInfoResult.data as {
-    region?: string | null;
-    regions?: string[] | null;
-    categories?: string[] | null;
-    age_group?: string | null;
-    user_type?: string | null;
-  } | null;
-
-  const regions = (filter?.regions ?? []) as unknown[];
-  const categories = (filter?.categories ?? []) as unknown[];
-  const fallbackRegions = (userInfo?.regions ?? []) as unknown[];
-  const fallbackCategories = (userInfo?.categories ?? []) as unknown[];
-  const region =
-    typeof (regions[0] ?? fallbackRegions[0]) === "string" &&
-    (regions[0] ?? fallbackRegions[0]) !== "전국" &&
-    (regions[0] ?? fallbackRegions[0]) !== "전체"
-      ? ((regions[0] ?? fallbackRegions[0]) as string)
-      : null;
-  const category =
-    typeof (categories[0] ?? fallbackCategories[0]) === "string" &&
-    (categories[0] ?? fallbackCategories[0]) !== "전체"
-      ? ((categories[0] ?? fallbackCategories[0]) as string)
-      : null;
-  const fallbackAge =
-    typeof userInfo?.age_group === "string" && userInfo.age_group.trim()
-      ? Number(userInfo.age_group)
-      : null;
-  const targetAge =
-    typeof filter?.target_age === "number"
-      ? filter.target_age
-      : Number.isInteger(fallbackAge)
-        ? fallbackAge
-        : null;
-
-  return {
-    loginId,
-    region,
-    category,
-    targetAge,
-    userType: userInfo?.user_type ?? null,
-  };
-}
-
 export const dynamic = "force-dynamic";
 
-const MATCH_COUNT = 20;
+const MATCH_COUNT = 30;
 const RESULT_COUNT = 5;
+const MATCH_THRESHOLD = 0.65;
+const NATIONWIDE_REGION = "전국";
+const REGION_ALIAS_GROUPS: string[][] = [
+  ["강원특별자치도", "강원도"],
+  ["전북특별자치도", "전라북도"],
+  ["제주특별자치도", "제주도"],
+  ["세종특별자치시", "세종시"],
+];
 
 const PRIMARY_BASE_COLUMNS = [
   "id",
@@ -147,6 +90,7 @@ type FilterConflict = {
 type NormalizedResultRow = Record<string, unknown> & {
   summary: string | null;
   s_category: string | null;
+  region: string | null;
   apply_start_dt: string | null;
   apply_end_dt: string | null;
   target_group: string | null;
@@ -156,6 +100,62 @@ type NormalizedResultRow = Record<string, unknown> & {
   additional_conditions: string | null;
   detail_url: string | null;
 };
+type RerankRow = NormalizedResultRow & {
+  id: number;
+  similarity?: number;
+  final_score: number;
+  match_bonus: number;
+};
+
+async function loadUserContext(
+  request: NextRequest
+): Promise<RagUserContext | undefined> {
+  const loginId = getLoginIdFromRequest(request);
+  if (!loginId) return undefined;
+
+  // ☑️수정: MVP 기준에서 RAG 추천도 user_filters가 아니라 user_info 원본 프로필만 참조
+  const userInfoResult = await supabase
+    .from("user_info")
+    .select("region,regions,categories,age_group,user_type")
+    .eq("login_id", loginId)
+    .maybeSingle();
+
+  const userInfo = userInfoResult.data as {
+    region?: string | null;
+    regions?: string[] | null;
+    categories?: string[] | null;
+    age_group?: string | null;
+    user_type?: string | null;
+  } | null;
+
+  const regions = (userInfo?.regions ?? []) as unknown[];
+  const categories = (userInfo?.categories ?? []) as unknown[];
+  const rawRegion = regions[0] ?? userInfo?.region;
+  const rawCategory = categories[0];
+  const region =
+    typeof rawRegion === "string" &&
+    rawRegion !== NATIONWIDE_REGION &&
+    rawRegion !== "전체"
+      ? rawRegion
+      : null;
+  const category =
+    typeof rawCategory === "string" && rawCategory !== "전체"
+      ? rawCategory
+      : null;
+  const fallbackAge =
+    typeof userInfo?.age_group === "string" && userInfo.age_group.trim()
+      ? Number(userInfo.age_group)
+      : null;
+  const targetAge = Number.isInteger(fallbackAge) ? fallbackAge : null;
+
+  return {
+    loginId,
+    region,
+    category,
+    targetAge,
+    userType: userInfo?.user_type ?? null,
+  };
+}
 
 function buildProfileFilterConflicts(
   userContext: RagUserContext | undefined,
@@ -191,6 +191,7 @@ function buildProfileFilterConflicts(
     userContext.targetAge !== null &&
     userContext.targetAge !== undefined &&
     selfQuery.target_age !== null &&
+    selfQuery.target_age !== undefined &&
     userContext.targetAge !== selfQuery.target_age
   ) {
     conflicts.push({
@@ -201,6 +202,23 @@ function buildProfileFilterConflicts(
     });
   }
   return conflicts;
+}
+
+function conflictLabel(field: FilterConflict["field"]) {
+  if (field === "region") return "지역";
+  if (field === "category") return "관심 분야";
+  return "나이";
+}
+
+function buildFilterConflictQuestion(conflicts: FilterConflict[]) {
+  const lines = conflicts.map(
+    (conflict) =>
+      `${conflictLabel(conflict.field)}은 저장된 값이 '${conflict.profile_value}'인데, 이번 질문에서는 '${conflict.ai_value}'로 보여요.`
+  );
+  const target = conflicts
+    .map((conflict) => `${conflictLabel(conflict.field)} ${conflict.ai_value}`)
+    .join(", ");
+  return `${lines.join("\n")}\n이번 대화에서는 ${target} 기준으로 찾아볼까요?`;
 }
 
 function chooseEmbeddingQuery(query: string, selfQuery: SelfQueryFilters | null) {
@@ -250,17 +268,41 @@ function toNullableNumber(value: unknown): number | null {
   return null;
 }
 
-function compareBySimilarityDescThenIdAsc(
-  a: Record<string, unknown>,
-  b: Record<string, unknown>
-) {
-  const similarityA = toNullableNumber(a.similarity) ?? 0;
-  const similarityB = toNullableNumber(b.similarity) ?? 0;
-  if (similarityA !== similarityB) return similarityB - similarityA;
+function buildRegionCandidates(filterRegion: string): string[] {
+  const group = REGION_ALIAS_GROUPS.find((items) => items.includes(filterRegion));
+  if (!group) return [filterRegion, NATIONWIDE_REGION];
+  return Array.from(new Set([...group, NATIONWIDE_REGION]));
+}
 
-  const idA = toNullableNumber(a.id) ?? Number.MAX_SAFE_INTEGER;
-  const idB = toNullableNumber(b.id) ?? Number.MAX_SAFE_INTEGER;
-  return idA - idB;
+function calculateFinalScore(
+  row: Record<string, unknown>,
+  similarity: number,
+  filterRegion: string | null,
+  userAge: number | null
+) {
+  const simScore = similarity * 100;
+  let bonus = 0;
+
+  if (filterRegion && row.region === filterRegion) {
+    bonus += 30;
+  }
+
+  if (userAge !== null) {
+    const min = toNullableNumber(row.target_age_min);
+    const max = toNullableNumber(row.target_age_max);
+    if (min !== null || max !== null) {
+      if ((min === null || min <= userAge) && (max === null || max >= userAge)) {
+        bonus += 10;
+      }
+    }
+  }
+
+  return { finalScore: simScore + bonus, matchBonus: bonus };
+}
+
+function compareByFinalScoreDescThenIdAsc(a: RerankRow, b: RerankRow) {
+  if (a.final_score !== b.final_score) return b.final_score - a.final_score;
+  return a.id - b.id;
 }
 
 function normalizeResultRow(row: Record<string, unknown>): NormalizedResultRow {
@@ -298,6 +340,7 @@ function normalizeResultRow(row: Record<string, unknown>): NormalizedResultRow {
     ...row,
     summary,
     s_category: sCategory,
+    region: toNullableString(row.region),
     apply_start_dt: applyStart,
     apply_end_dt: applyEnd,
     target_group: cleanTargetGroup(row.target_group, targetTags),
@@ -344,13 +387,135 @@ function normalizeHistory(value: unknown): RagHistoryMessage[] {
     .slice(-8);
 }
 
+function buildHistoryConditionQuery(
+  question: string,
+  history: RagHistoryMessage[]
+) {
+  // ☑️수정: 짧은 확인 답변에서도 직전 사용자 발화의 지역/나이/분야 조건을 재사용
+  const recentUserMessages = history
+    .filter((message) => message.role === "user")
+    .slice(-3)
+    .map((message) => message.content.trim())
+    .filter(Boolean);
+
+  if (recentUserMessages.length === 0) return question;
+  return [...recentUserMessages, question].join("\n");
+}
+
+function compactConditionText(value: string) {
+  return value.replace(/\s/g, "").toLowerCase();
+}
+
+function buildRegionAliases(region: string) {
+  const aliases = new Set([region]);
+  aliases.add(region.replace(/특별자치도|특별자치시|특별시|광역시|도|시$/g, ""));
+  aliases.add(region.slice(0, 2));
+  return [...aliases].filter((alias) => alias.length >= 2);
+}
+
+function extractLocalSelfQueryFilters(query: string): SelfQueryFilters | null {
+  // ☑️수정: history에서 이미 말한 명확한 지역/나이/분야는 Gemini self-query 실패와 무관하게 재사용
+  const compact = compactConditionText(query);
+  if (!compact) return null;
+
+  const region =
+    Array.from(REGIONS).find(
+      (item) =>
+        item !== ALL_OPTION &&
+        buildRegionAliases(item).some((alias) =>
+          compact.includes(compactConditionText(alias))
+        )
+    ) ?? null;
+  const category =
+    Array.from(CATEGORIES).find(
+      (item) =>
+        item !== ALL_OPTION && compact.includes(compactConditionText(item))
+    ) ?? null;
+  const ageMatch = compact.match(/(?:만)?(\d{1,3})(?:세|살)/);
+  const targetAge = ageMatch ? Number(ageMatch[1]) : null;
+  const safeTargetAge =
+    targetAge !== null && targetAge >= 0 && targetAge <= 120 ? targetAge : null;
+
+  if (!region && !category && safeTargetAge === null) return null;
+
+  return {
+    region,
+    target_age: safeTargetAge,
+    category,
+    semantic_query: query,
+    confidence: 0.9,
+    applied: true,
+    reason: "local_condition_signal",
+  };
+}
+
+function extractExplicitHistoryCategory(history: RagHistoryMessage[]) {
+  // ☑️수정: 현재 질문에서 빠진 분야만 보충하기 위해 최근 사용자 발화의 명시 category만 분리 추출
+  const recentUserQuery = history
+    .filter((message) => message.role === "user")
+    .slice(-3)
+    .map((message) => message.content.trim())
+    .filter(Boolean)
+    .join("\n");
+
+  if (!recentUserQuery) return null;
+  return extractLocalSelfQueryFilters(recentUserQuery)?.category ?? null;
+}
+
+function supplementMissingCategoryFromHistory(
+  selfQuery: SelfQueryFilters | null,
+  history: RagHistoryMessage[]
+): SelfQueryFilters | null {
+  // ☑️수정: 현재 질문에 지역/나이는 있지만 category가 없을 때만 history category를 보충
+  if (!selfQuery?.applied || selfQuery.category) return selfQuery;
+  const hasCurrentRegionOrAge =
+    Boolean(selfQuery.region) ||
+    (selfQuery.target_age !== null && selfQuery.target_age !== undefined);
+  if (!hasCurrentRegionOrAge) return selfQuery;
+
+  const historyCategory = extractExplicitHistoryCategory(history);
+  if (!historyCategory) return selfQuery;
+
+  return {
+    ...selfQuery,
+    category: historyCategory,
+    reason: selfQuery.reason
+      ? `${selfQuery.reason}+history_category`
+      : "history_category",
+  };
+}
+
+async function extractContextualSelfQuery(
+  question: string,
+  history: RagHistoryMessage[]
+) {
+  // ☑️수정: 현재 질문에 조건이 있으면 현재 질문을 우선하고, 없을 때만 history를 보조 조건으로 사용
+  const currentLocalSelfQuery = extractLocalSelfQueryFilters(question);
+  if (currentLocalSelfQuery) {
+    return supplementMissingCategoryFromHistory(currentLocalSelfQuery, history);
+  }
+
+  if (hasSelfQueryFilterSignal(question)) {
+    const currentSelfQuery = await extractSelfQueryFilters(question);
+    return supplementMissingCategoryFromHistory(currentSelfQuery, history);
+  }
+
+  const historyConditionQuery = buildHistoryConditionQuery(question, history);
+  if (historyConditionQuery === question) return null;
+  const historyLocalSelfQuery = extractLocalSelfQueryFilters(historyConditionQuery);
+  if (historyLocalSelfQuery) return historyLocalSelfQuery;
+  if (!hasSelfQueryFilterSignal(historyConditionQuery)) return null;
+
+  return extractSelfQueryFilters(historyConditionQuery);
+}
+
 function buildFallbackAnswer(question: string, policies: RagPolicyContext[]) {
   if (policies.length === 0) {
-    return `"${question}"에 맞는 정책을 찾지 못했어요. 지역, 나이, 창업 단계 같은 조건을 조금 더 구체적으로 입력해보세요.`;
+    return `"${question}"에 맞는 정책을 바로 찾지는 못했어요. 지역, 나이, 관심 분야, 현재 상황을 조금 더 구체적으로 알려주시면 다시 좁혀볼게요.`;
   }
   const names = policies
     .slice(0, 3)
-    .map((policy) => `- ${policy.title}${policy.detail_url ? "" : " (상세 링크 없음)"}`)
+    .map((policy) => `- ${policy.title}${policy.detail_url ? "" : " (상세 링크 확인 필요)"}`)
     .join("\n");
   return `관련 정책을 찾았어요. 아래 후보를 먼저 확인해보세요.\n${names}`;
 }
@@ -375,39 +540,21 @@ function isCasualMessage(message: string) {
     "보조금",
     "교육",
     "멘토링",
-    "천안",
-    "아산",
-    "서울",
-    "경기",
-    "강원",
-    "충청",
-    "전라",
-    "경상",
-    "제주",
   ];
-  if (policySignals.some((signal) => normalized.includes(signal))) {
-    return false;
-  }
+  if (policySignals.some((signal) => normalized.includes(signal))) return false;
 
   const casualSignals = [
     "안녕",
-    "안녕하세요",
     "하이",
-    "ㅎㅇ",
     "hello",
     "hi",
     "고마워",
     "감사",
     "뭐해",
-    "너누구",
-    "도와줘",
+    "넌누구",
     "정보",
-    "뭘말",
     "뭐말",
     "뭐주면",
-    "어떤정보",
-    "어떻게말",
-    "무엇을말",
   ];
   return (
     normalized.length <= 40 &&
@@ -415,54 +562,52 @@ function isCasualMessage(message: string) {
   );
 }
 
-// "나에게 맞는 정책 추천" 같은 개인 맞춤 요청 감지
 function isPersonalizedRequest(message: string): boolean {
   const normalized = message.replace(/\s/g, "").toLowerCase();
   const signals = [
     "나에게맞",
     "나한테맞",
     "나랑맞",
-    "나에게적합",
+    "내게맞",
     "맞춤",
     "추천해줘",
     "추천해주세요",
     "추천부탁",
     "맞는정책",
-    "내게맞",
   ];
   return signals.some((signal) => normalized.includes(signal));
 }
 
-// 사용자 프로필이 비어있는지 확인
 function hasUserProfile(userContext: RagUserContext | undefined): boolean {
   if (!userContext) return false;
+  // ☑️수정: 홈 AI 추천 진입 조건과 맞추기 위해 user_type은 필수 조건에서 제외
   return Boolean(
     userContext.region &&
       userContext.category &&
-      userContext.userType &&
       userContext.targetAge !== null &&
       userContext.targetAge !== undefined
   );
 }
 
-// 저장된 필터를 첫 메시지 prefix로 변환
 function buildSavedFilterPrefix(userContext: RagUserContext): string {
   const parts: string[] = [];
   if (userContext.region) parts.push(`지역: ${userContext.region}`);
   if (userContext.userType) parts.push(`사용자 유형: ${userContext.userType}`);
-  if (userContext.category) parts.push(`카테고리: ${userContext.category}`);
+  if (userContext.category) parts.push(`관심 분야: ${userContext.category}`);
   if (userContext.targetAge !== null && userContext.targetAge !== undefined) {
     parts.push(`나이: ${userContext.targetAge}세`);
   }
   if (parts.length === 0) return "";
-  return `현재 저장된 정보(${parts.join(", ")})를 바탕으로 추천을 시작합니다.\n\n`;
+  return `저장된 정보(${parts.join(", ")})를 함께 반영해서 추천했어요.\n\n`;
 }
 
-const ASK_PROFILE_REPLY = `더 정확한 추천을 위해 몇 가지만 알려주세요!
-1. 어디에 거주하세요? (예: 서울, 제주, 부산 등)
-2. 나이가 어떻게 되세요? (또는 연령대)
-3. 어떤 분야가 궁금하세요? (창업/주거/취업/자금 등)
-이 중 알려주시는 만큼 더 적합한 정책을 찾아드릴게요.`;
+const ASK_PROFILE_REPLY = `정확한 추천을 위해 몇 가지만 알려주세요.
+지역:
+나이:
+관심 분야:
+현재 상황:
+
+이 중 아는 것만 적어주셔도 지금 신청 가능한 정책 위주로 다시 찾아볼게요.`;
 
 function buildGeneralAnswer(question: string) {
   const normalized = question.replace(/\s/g, "");
@@ -472,9 +617,9 @@ function buildGeneralAnswer(question: string) {
     normalized.includes("무엇") ||
     normalized.includes("어떤")
   ) {
-    return "지역, 나이, 관심 분야를 알려주시면 좋아요. 예를 들면 “천안에 사는 25살 예비창업자인데 자금 지원이 궁금해요”처럼 물어보면 맞는 정책을 찾아드릴게요.";
+    return "조건을 말씀해주시면 신청 가능한 공고 위주로 추천해드릴게요!\n지역:\n나이:\n관심 분야:\n현재 상황:";
   }
-  return "안녕하세요! 궁금한 걸 물어보세요. 지역, 나이, 관심 분야나 창업 단계가 있으면 더 잘 맞는 정책을 추천해드릴게요.";
+  return "조건을 말씀해주시면 신청 가능한 공고 위주로 추천해드릴게요!\n지역:\n나이:\n관심 분야:\n현재 상황:";
 }
 
 export async function POST(request: NextRequest) {
@@ -482,6 +627,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => ({}));
     const question = typeof body.message === "string" ? body.message.trim() : "";
     const history = normalizeHistory(body.history);
+    const confirmedFilterOverride = body.confirmed_filter_override === true;
 
     if (!question) {
       return NextResponse.json(
@@ -498,12 +644,18 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // 로그인 사용자 컨텍스트 먼저 로드
     const userContext = await loadUserContext(request);
+    const selfQuery = await extractContextualSelfQuery(question, history);
+    const contextualUserContext: RagUserContext = {
+      // ☑️수정: 프로필이 비어 있어도 history/question에서 확인된 조건이 있으면 ask_profile로 되돌아가지 않도록 병합
+      loginId: userContext?.loginId ?? null,
+      region: selfQuery?.region ?? userContext?.region ?? null,
+      category: selfQuery?.category ?? userContext?.category ?? null,
+      targetAge: selfQuery?.target_age ?? userContext?.targetAge ?? null,
+      userType: userContext?.userType ?? null,
+    };
 
-    // 맞춤 추천 요청인데 사용자 프로필이 없으면, 검색 건너뛰고 정보만 묻기
-    // (비회원 + "나에게 맞는 정책" 케이스)
-    if (isPersonalizedRequest(question) && !hasUserProfile(userContext)) {
+    if (isPersonalizedRequest(question) && !hasUserProfile(contextualUserContext)) {
       return NextResponse.json({
         reply: ASK_PROFILE_REPLY,
         results: [],
@@ -511,10 +663,18 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const selfQuery = hasSelfQueryFilterSignal(question)
-      ? await extractSelfQueryFilters(question)
-      : null;
     const filterConflicts = buildProfileFilterConflicts(userContext, selfQuery);
+
+    if (filterConflicts.length > 0 && !confirmedFilterOverride) {
+      return NextResponse.json({
+        reply: buildFilterConflictQuestion(filterConflicts),
+        results: [],
+        intent: "confirm_filter_override",
+        pending_query: question,
+        filter_conflicts: filterConflicts,
+      });
+    }
+
     const effectiveFilterCategory =
       selfQuery?.category ?? userContext?.category ?? null;
     const effectiveFilterRegion =
@@ -543,7 +703,7 @@ export async function POST(request: NextRequest) {
     const queryEmbedding = await getQueryEmbedding(embeddingQuery);
     const hybridResult = await supabase.rpc("match_announcements_hybrid", {
       query_embedding: queryEmbedding,
-      match_threshold: 0.2,
+      match_threshold: MATCH_THRESHOLD,
       match_count: MATCH_COUNT,
       filter_category: effectiveFilterCategory,
       filter_region: effectiveFilterRegion,
@@ -574,16 +734,39 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: richError.message }, { status: 500 });
     }
 
-    const results = ((richRowsRaw ?? []) as Array<Record<string, unknown>>)
-      .map((row) => ({
-        ...normalizeResultRow(row),
-        similarity: similarityById.get(row.id as number) ?? 0,
-      }))
-      .sort(compareBySimilarityDescThenIdAsc)
+    const sourceRows =
+      richRowsRaw && richRowsRaw.length > 0
+        ? (richRowsRaw as Array<Record<string, unknown>>)
+        : hybridRows;
+
+    const results = sourceRows
+      .map((row) => {
+        const normalized = normalizeResultRow(row);
+        const id = toNullableNumber(normalized.id) ?? 0;
+        const similarity = similarityById.get(id) ?? 0;
+        const { finalScore, matchBonus } = calculateFinalScore(
+          normalized,
+          similarity,
+          effectiveFilterRegion,
+          effectiveUserAge
+        );
+        return {
+          ...normalized,
+          id,
+          similarity,
+          final_score: finalScore,
+          match_bonus: matchBonus,
+        } satisfies RerankRow;
+      })
       .filter(
         (row) =>
-          recruitmentStatus(row.apply_start_dt, row.apply_end_dt) !== "마감"
+          row.id > 0 &&
+          recruitmentStatus(row.apply_start_dt, row.apply_end_dt) !== "마감" &&
+          (!effectiveFilterRegion ||
+            (typeof row.region === "string" &&
+              buildRegionCandidates(effectiveFilterRegion).includes(row.region)))
       )
+      .sort(compareByFinalScoreDescThenIdAsc)
       .slice(0, RESULT_COUNT);
 
     const policies = results.map((row): RagPolicyContext => {
@@ -606,8 +789,6 @@ export async function POST(request: NextRequest) {
       };
     });
 
-    // userContext는 위에서 이미 로드됨 (로그인 사용자 저장 필터)
-
     let reply: string;
     try {
       reply = await generatePolicyAnswer({
@@ -617,19 +798,20 @@ export async function POST(request: NextRequest) {
         userContext: effectiveUserContext,
       });
     } catch (error) {
-      console.warn("[/api/chat/rag] Gemini 답변 생성 실패:", error);
+      console.warn("[/api/chat/rag] Gemini answer failed:", error);
       reply = buildFallbackAnswer(question, policies);
     }
 
-    // 로그인 + 저장 필터 있고 첫 메시지일 때만, 답변 앞에 안내 prefix 추가
-    if (history.length === 0 && hasUserProfile(profileContributionContext)) {
+    if (filterConflicts.length > 0 && confirmedFilterOverride) {
+      reply = `좋아요. 이번 대화에서는 방금 말씀하신 조건을 우선해서 찾아봤어요.\n\n${reply}`;
+    } else if (history.length === 0 && hasUserProfile(profileContributionContext)) {
       reply = buildSavedFilterPrefix(profileContributionContext) + reply;
     }
 
     return NextResponse.json({
       reply,
       results,
-      rpc_used: "hybrid",
+      rpc_used: "hybrid_rerank",
       self_query: selfQuery,
       filter_conflicts: filterConflicts,
     });

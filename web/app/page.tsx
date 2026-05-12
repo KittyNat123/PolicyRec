@@ -34,10 +34,9 @@ const STATUSES: (RecruitmentStatus | typeof ALL)[] = [
   "상시",
 ];
 
-const TARGET_AGE_PRESETS: Record<string, string> = {
-  청년: "25",
-  중장년: "45",
-  노인: "65",
+const TARGET_AGE_RANGES: Record<string, { min: number; max: number | null; representative: number }> = {
+  청년: { min: 19, max: 34, representative: 25 },
+  시니어: { min: 65, max: null, representative: 65 },
 };
 
 const TARGET_SEARCH_TERMS: Record<string, string> = {
@@ -66,6 +65,7 @@ const CATEGORY_UI_MAP: Record<string, string> = {
 };
 
 const PENDING_CHAT_PROMPT_KEY = "policyrec-pending-chat-prompt";
+const OPEN_CHAT_KEY = "policyrec-open-chat";
 type MainRecommendation = {
   id: number;
   title: string;
@@ -77,15 +77,26 @@ type MainRecommendation = {
   status?: string;
   reason?: string;
 };
+type SearchViewTab = "integrated" | "filtered";
 
 const CATEGORY_OPTIONS = CATEGORIES;
 const REGION_OPTIONS = REGIONS;
+const SEARCH_ALLOWED_PATTERN = /^[0-9A-Za-z가-힣\s\-+#()[\]&,.㈜㈔'\/]+$/;
+const INVALID_SEARCH_QUERY_MESSAGE =
+  "한글, 영문, 숫자, 일부 특수문자(- + # () [] & , . ㈜ ㈔ ' /)만 사용할 수 있습니다.";
+const SHOW_MVP_FILTER_SAVE_BUTTON = false;
 
 function parseTargetAge(value: string): number | null {
   if (!value.trim()) return null;
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0 || parsed > 120) return null;
   return parsed;
+}
+
+function deriveTargetAgeRangeFromTargets(targets: string[]) {
+  const targetWithAge = targets.find((target) => TARGET_AGE_RANGES[target]);
+  if (!targetWithAge) return null;
+  return TARGET_AGE_RANGES[targetWithAge];
 }
 
 function savedRegionToUi(region: string | undefined): string {
@@ -102,6 +113,146 @@ function savedCategoryToUi(category: string | undefined): string {
 async function readApiError(response: Response, fallback: string) {
   const data = await response.json().catch(() => ({}));
   return data.error ?? fallback;
+}
+
+function SearchTabIcon({
+  type,
+  active,
+  compact = false,
+}: {
+  type: SearchViewTab;
+  active: boolean;
+  compact?: boolean;
+}) {
+  const color = active ? "#2563eb" : "#6b7280";
+  const iconClass = compact ? "h-4 w-4" : "h-8 w-8 sm:h-10 sm:w-10";
+
+  if (type === "integrated") {
+    return (
+      <svg aria-hidden="true" viewBox="0 0 32 32" className={iconClass}>
+        <circle cx="14" cy="14" r="9" fill="none" stroke={color} strokeWidth="2.4" />
+        <path d="M20.5 20.5 27 27" fill="none" stroke={color} strokeWidth="2.4" strokeLinecap="round" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg aria-hidden="true" viewBox="0 0 32 32" className={iconClass}>
+      <path
+        d="M10 5h12a3 3 0 0 1 3 3v19l-9-5-9 5V8a3 3 0 0 1 3-3Z"
+        fill="none"
+        stroke={color}
+        strokeWidth="2.4"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function SearchTabButton({
+  value,
+  active,
+  onClick,
+}: {
+  value: SearchViewTab;
+  active: boolean;
+  onClick: () => void;
+}) {
+  const label = value === "integrated" ? "통합검색" : "조건검색";
+
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={`flex min-h-[92px] items-center justify-center gap-4 rounded-[28px] border px-5 py-5 text-left transition sm:min-h-[112px] sm:gap-5 sm:px-8 ${active
+        ? "border-blue-200 bg-blue-50 text-blue-600 shadow-[0_16px_40px_rgba(37,99,235,0.08)]"
+        : "border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50"
+        }`}
+    >
+      <SearchTabIcon type={value} active={active} />
+      <span className="text-2xl font-bold tracking-tight sm:text-[2rem]">{label}</span>
+    </button>
+  );
+}
+
+function HeaderSearchTabs({
+  activeTab,
+  onSelect,
+}: {
+  activeTab: SearchViewTab;
+  onSelect: (tab: SearchViewTab) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        aria-pressed={activeTab === "integrated"}
+        onClick={() => onSelect("integrated")}
+        className={`flex h-10 items-center justify-center gap-1.5 rounded-xl border px-4 text-sm font-semibold transition ${activeTab === "integrated"
+          ? "border-blue-200 bg-blue-50 text-blue-600 shadow-sm"
+          : "border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50"
+          }`}
+      >
+        <SearchTabIcon type="integrated" active={activeTab === "integrated"} compact />
+        <span>통합검색</span>
+      </button>
+      <button
+        type="button"
+        aria-pressed={activeTab === "filtered"}
+        onClick={() => onSelect("filtered")}
+        className={`flex h-10 items-center justify-center gap-1.5 rounded-xl border px-4 text-sm font-semibold transition ${activeTab === "filtered"
+          ? "border-blue-200 bg-blue-50 text-blue-600 shadow-sm"
+          : "border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50"
+          }`}
+      >
+        <SearchTabIcon type="filtered" active={activeTab === "filtered"} compact />
+        <span>조건검색</span>
+      </button>
+    </div>
+  );
+}
+
+function AppliedSearchChips({
+  activeTab,
+  query,
+  categories,
+  regions,
+  targets,
+  statuses,
+}: {
+  activeTab: SearchViewTab;
+  query: string;
+  categories: string[];
+  regions: string[];
+  targets: string[];
+  statuses: string[];
+}) {
+  const chips = [
+    activeTab === "filtered" ? "조건검색" : "통합검색",
+    query ? `검색어: ${query}` : null,
+    ...categories.map((value) => `분야: ${value}`),
+    ...regions.map((value) => `지역: ${value}`),
+    ...targets.map((value) => `대상: ${value}`),
+    ...statuses.map((value) => `상태: ${value}`),
+  ].filter((value): value is string => Boolean(value));
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      {chips.map((chip, index) => (
+        <span
+          key={`${chip}-${index}`}
+          className={`rounded-full px-3 py-1.5 text-xs font-semibold sm:text-sm ${index === 0
+            ? "bg-blue-600 text-white"
+            : "border border-slate-200 bg-white text-slate-700"
+            }`}
+        >
+          {chip}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function formatSavedChatDate(value: string): string {
@@ -137,7 +288,16 @@ function isLowSignalChatInput(value: string) {
 }
 
 const CHAT_INPUT_GUIDE =
-  "원하시는 정책을 검색해보세요!\n예: 서울 거주 25살 예비창업자 자금 지원, 청년 주거 지원, 구직자 교육 지원";
+  "조건을 말씀해주시면 신청 가능한 공고 위주로 추천해드릴게요!\n지역:\n나이:\n관심 분야:\n현재 상황:";
+
+function isAffirmativeChatReply(value: string) {
+  const normalized = value.trim().replace(/\s+/g, "").toLowerCase();
+  // ☑️수정: "네 그럴게요"처럼 자연스러운 확인 답변도 pending_query 승인으로 처리
+  return (
+    /^(응|네|예|좋아|좋아요|맞아|그렇게|그럴게|그럴게요|진행|찾아줘|yes|y|ok|okay)$/.test(normalized) ||
+    /^(응|네|예).*(그럴게|그렇게|좋아|진행|찾아줘|해줘|맞아)/.test(normalized)
+  );
+}
 
 function buildChatTranscript(messages: ChatMessage[]): string {
   return messages
@@ -244,13 +404,20 @@ const SORT_LABELS: Record<SortBy, string> = {
 };
 
 const SORT_DESCRIPTIONS: Record<SortBy, string> = {
-  recommended_desc: "검색어와 조건을 함께 반영한 추천 순서로 보여드려요.", // ☑️수정
+  recommended_desc: "검색어 또는 선택한 필터 기준에 맞춘 추천 순서로 보여드려요.",
   end_date_asc: "신청 마감이 빠른 정책부터 보여드려요.",
   start_date_desc: "최근 등록된 정책부터 보여드려요.",
 };
 
 export default function Home() {
   const [query, setQuery] = useState("");
+  const [useSavedFilterForSearch, setUseSavedFilterForSearch] = useState(false);
+  const [activeSearchTab, setActiveSearchTab] = useState<SearchViewTab>(() =>
+    typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("mode") === "filtered"
+      ? "filtered"
+      : "integrated"
+  );
   const [filterCategories, setFilterCategories] = useState<string[]>([ALL]);
   const [filterRegion, setFilterRegion] = useState<string[]>([ALL]);
   const [filterTargets, setFilterTargets] = useState<string[]>([ALL]);
@@ -281,6 +448,12 @@ export default function Home() {
   const [mainRecommendationsLoading, setMainRecommendationsLoading] = useState(false);
   const [mainRecommendationsError, setMainRecommendationsError] = useState<string | null>(null);
 
+  const createClientSessionId = () => {
+    const timestamp = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
+    return `chat_${timestamp}_${Math.random().toString(36).slice(2, 8)}`;
+  };
+  const [currentSessionId, setCurrentSessionId] = useState(createClientSessionId);
+
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
@@ -289,8 +462,11 @@ export default function Home() {
   const chatAbortRef = useRef<AbortController | null>(null);
   const autoSaveTimerRef = useRef<number | null>(null);
   const lastSavedTranscriptRef = useRef("");
-  const autoFilterReadyRef = useRef(false);
+  const pendingChatOverrideRef = useRef<string | null>(null);
   const pendingChatPromptHandledRef = useRef(false);
+  const filterPanelRef = useRef<HTMLDivElement | null>(null);
+  // ☑️수정: 조건검색 탭 진입/초기화 시 같은 조건으로 자동검색이 중복 실행되지 않도록 마지막 키를 기억
+  const lastAutoFilterSearchKeyRef = useRef("");
   // 이탈 확인 팝업 — 어떤 액션을 확인 중인지 함께 기억
   // null = 팝업 닫힘 / "new" = 새 채팅 / "logout" = 로그아웃 / restore = 저장 대화 복원
   type LeaveAction = "new" | "logout" | { type: "restore"; chat: SavedChat };
@@ -401,6 +577,28 @@ export default function Home() {
   }, [loadSession]);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("mode") === "filtered") {
+      window.setTimeout(() => {
+        setActiveSearchTab("filtered");
+        filterPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 120);
+    }
+  }, []);
+
+  useEffect(() => {
+    function openRequestedChat() {
+      if (window.sessionStorage.getItem(OPEN_CHAT_KEY) !== "1") return;
+      window.sessionStorage.removeItem(OPEN_CHAT_KEY);
+      setChatOpen(true);
+    }
+
+    openRequestedChat();
+    window.addEventListener(OPEN_CHAT_KEY, openRequestedChat);
+    return () => window.removeEventListener(OPEN_CHAT_KEY, openRequestedChat);
+  }, []);
+
+  useEffect(() => {
     if (!currentUser || pendingChatPromptHandledRef.current) return;
     const pendingPrompt = window.sessionStorage.getItem(PENDING_CHAT_PROMPT_KEY);
     if (!pendingPrompt) return;
@@ -459,19 +657,6 @@ export default function Home() {
     // 첫 진입 시 1회만 실행
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    if (!autoFilterReadyRef.current) {
-      autoFilterReadyRef.current = true;
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      void handleSearch();
-    }, 350);
-    return () => window.clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterCategories, filterRegion, filterTargets, filterAge, filterStatus, showClosed]);
 
   function handleSortChange(next: SortBy) {
     if (next === sortBy && next !== "recommended_desc") return;
@@ -542,6 +727,7 @@ export default function Home() {
     setMainRecommendationsError(null);
     setShowScrappedOnly(false);
     setQuery("");
+    setUseSavedFilterForSearch(false);
     setFilterCategories([ALL]);
     setFilterRegion([ALL]);
     setFilterTargets([ALL]);
@@ -560,6 +746,8 @@ export default function Home() {
     setChatError(null);
     setChatOpen(false);
     setActiveChatId(null);
+    setCurrentSessionId(createClientSessionId());
+    pendingChatOverrideRef.current = null;
     setLeaveAction(null);
     await loadOpenAnnouncements(0, "end_date_asc", false);
   }
@@ -574,6 +762,15 @@ export default function Home() {
     setChatInput(prompt);
   }
 
+  function focusConditionFilters() {
+    setActiveSearchTab("filtered");
+    setHighlightFilter(true);
+    window.setTimeout(() => setHighlightFilter(false), 1800);
+    window.setTimeout(() => {
+      filterPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
+  }
+
   function moveToProfileFromChat() {
     const latestUserPrompt = [...chatMessages]
       .reverse()
@@ -581,14 +778,16 @@ export default function Home() {
     const pendingPrompt =
       chatInput.trim() ||
       latestUserPrompt ||
-      "ì €ìž¥ëœ ë‚´ ì •ë³´ë¡œ ë‹¤ì‹œ ì¶”ì²œí•´ì£¼ê³  ì´ìœ ë„ ì•Œë ¤ì¤˜.";
+      "저장된 내 정보로 다시 추천해주고 이유도 알려줘.";
     window.sessionStorage.setItem(PENDING_CHAT_PROMPT_KEY, pendingPrompt);
     window.location.href = "/profile";
   }
 
   function hasSavedProfile() {
+    // ☑️수정: MVP에서는 사용자 유형(user_type)을 필수 조건에서 제외
+    // - 지역, 관심 분야, 나이만 저장되어 있어도 AI 추천 진입 가능
+    // - user_type은 추천 정확도를 높이는 선택 정보로만 사용
     return Boolean(
-      savedFilter?.user_type &&
       savedFilter?.regions?.length &&
       savedFilter?.categories?.length &&
       typeof savedFilter?.target_age === "number"
@@ -604,7 +803,7 @@ export default function Home() {
       setRecommendPrompt("profile");
       return;
     }
-    openChatWithPrompt("내 저장 정보와 스크랩 이력을 바탕으로 지금 신청할 만한 정책을 추천하고 그 이유를 알려줘.");
+    openChatWithPrompt("내 저장 정보를 바탕으로 지금 신청할 만한 정책을 추천하고 그 추천 이유도 알려줘.");
   }
 
   function requestScrapRecommendation() {
@@ -629,6 +828,8 @@ export default function Home() {
     setChatInput("");
     setChatError(null);
     setActiveChatId(null);
+    setCurrentSessionId(createClientSessionId());
+    pendingChatOverrideRef.current = null;
     await loadSession();
   }
 
@@ -691,6 +892,7 @@ export default function Home() {
         title,
         content,
         ann_ids: annIds,
+        session_id: currentSessionId,
       }),
     });
 
@@ -744,6 +946,7 @@ export default function Home() {
           id: targetChatId,
           content,
           ann_ids: annIds,
+          session_id: currentSessionId,
         }),
       });
 
@@ -770,11 +973,34 @@ export default function Home() {
         window.clearTimeout(autoSaveTimerRef.current);
       }
     };
+  }, [activeChatId, chatLoading, chatMessages, currentUser, currentSessionId]);
+
+  useEffect(() => {
+    function persistChatBeforeLeaving() {
+      if (!currentUser || chatMessages.length === 0 || chatLoading) return;
+      void saveCurrentChat(true);
+    }
+
+    window.addEventListener("pagehide", persistChatBeforeLeaving);
+    document.addEventListener("visibilitychange", persistChatBeforeLeaving);
+    return () => {
+      window.removeEventListener("pagehide", persistChatBeforeLeaving);
+      document.removeEventListener("visibilitychange", persistChatBeforeLeaving);
+    };
+    // saveCurrentChat intentionally captures the current render state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChatId, chatLoading, chatMessages, currentUser]);
 
-  // "새 채팅 시작" 버튼 클릭 — 대화 내용이 있으면 무조건 확인 팝업 먼저
+  function hasUnsavedChatChanges() {
+    if (chatLoading) return true;
+    if (chatMessages.length === 0) return false;
+    const currentTranscript = buildChatTranscript(chatMessages);
+    return Boolean(currentTranscript && currentTranscript !== lastSavedTranscriptRef.current);
+  }
+
+  // "새 채팅 시작" 버튼 클릭 — 마지막 저장본과 달라진 내용이 있을 때만 확인
   function requestNewChat() {
-    if (chatMessages.length > 0 || chatLoading) {
+    if (hasUnsavedChatChanges()) {
       setLeaveAction("new");
       return;
     }
@@ -783,11 +1009,11 @@ export default function Home() {
 
   // "이전 대화로 돌아가기" 클릭 — 현재 대화 있으면 확인 팝업, 없으면 바로 복원
   function requestRestoreChat(chat: SavedChat) {
-    if (chatMessages.length > 0 || chatLoading) {
-      setLeaveAction({ type: "restore", chat });
+    if (activeChatId === chat.id || !hasUnsavedChatChanges()) {
+      doRestoreChat(chat);
       return;
     }
-    doRestoreChat(chat);
+    setLeaveAction({ type: "restore", chat });
   }
 
   // 팝업에서 "그냥 이동 / 이동할게요" 확정 시 — leaveAction에 따라 분기
@@ -824,6 +1050,8 @@ export default function Home() {
     setChatInput("");
     setChatError(null);
     setActiveChatId(null);
+    setCurrentSessionId(createClientSessionId());
+    pendingChatOverrideRef.current = null;
     lastSavedTranscriptRef.current = "";
     setLeaveAction(null);
     showToast("새 채팅을 시작했습니다.");
@@ -842,6 +1070,8 @@ export default function Home() {
     setChatInput("");
     setChatError(null);
     setActiveChatId(chat.id);
+    setCurrentSessionId(chat.session_id ?? createClientSessionId());
+    pendingChatOverrideRef.current = null;
     lastSavedTranscriptRef.current = chat.content;
     setLeaveAction(null);
     showToast(`"${chat.title ?? "저장된 대화"}"를 불러왔습니다.`);
@@ -914,6 +1144,11 @@ export default function Home() {
   }, [currentUser, scrappedIds, showScrappedOnly]);
 
   async function saveCurrentFilter() {
+    // ☑️수정: P0-0 MVP에서는 user_filters 저장 기능을 숨김/비활성화하고 호출도 차단
+    if (!SHOW_MVP_FILTER_SAVE_BUTTON) {
+      setUiMessage("MVP에서는 필터 저장 기능을 잠시 숨겨두었습니다.");
+      return;
+    }
     setUiMessage(null);
     const targetAge = parseTargetAge(filterAge);
     if (filterAge.trim() && targetAge === null) {
@@ -952,7 +1187,8 @@ export default function Home() {
     setFilterAge(
       typeof savedFilter.target_age === "number" ? String(savedFilter.target_age) : ""
     );
-    setUiMessage("저장된 필터를 적용했습니다.");
+    // ☑️수정: P0-0 기준 문구 정리 (실제 출처는 user_info 기반 savedFilter)
+    setUiMessage("내 프로필 기준 필터를 불러왔습니다.");
   }
 
   async function handleSearch(options?: {
@@ -960,57 +1196,71 @@ export default function Home() {
     preferredSort?: SortBy;
     appendOffset?: number; // 더보기용. 지정 시 append 모드
   }) {
-    const trimmed = query.trim();
-    const selectedCategories = filterCategories.filter((value) => value !== ALL);
-    const selectedRegions = filterRegion.filter((value) => value !== ALL);
-    const selectedStatuses = filterStatus.filter((value) => value !== ALL);
-    const selectedTargets = filterTargets.filter((value) => value !== ALL);
+    const isConditionSearch = activeSearchTab === "filtered";
+    const profileFilter =
+      !isConditionSearch && currentUser && useSavedFilterForSearch ? savedFilter : null;
+    const trimmed = isConditionSearch ? "" : query.trim();
+    const selectedCategories = isConditionSearch
+      ? filterCategories.filter((value) => value !== ALL)
+      : profileFilter
+        ? (profileFilter.categories ?? []).filter((value): value is string => Boolean(value))
+        : [];
+    const selectedRegions = isConditionSearch
+      ? filterRegion.filter((value) => value !== ALL)
+      : profileFilter
+        ? (profileFilter.regions ?? []).filter((value): value is string => Boolean(value && value !== ALL))
+        : [];
+    const selectedStatuses = isConditionSearch
+      ? filterStatus.filter((value) => value !== ALL)
+      : [];
+    const selectedTargets = isConditionSearch
+      ? filterTargets.filter((value) => value !== ALL)
+      : [];
     const preferredSort = options?.preferredSort ?? sortBy;
-    const savedCategories =
-      currentUser && savedFilter?.categories
-        ? savedFilter.categories.filter((value): value is string => Boolean(value))
-        : [];
-    const savedRegions =
-      currentUser && savedFilter?.regions
-        ? savedFilter.regions.filter((value): value is string => Boolean(value && value !== "전국"))
-        : [];
-    const savedTargetAge =
-      currentUser && typeof savedFilter?.target_age === "number"
-        ? savedFilter.target_age
-        : null;
+    // ☑️수정: 조건검색 탭은 UI 필터만 적용되도록 검색어 합성을 막음
     const categorySearchTerm =
-      selectedCategories.length > 1 ? selectedCategories.join(" ") : "";
-    const regionSearchTerm = selectedRegions.length > 1 ? selectedRegions.join(" ") : "";
-    const targetSearchTerm = selectedTargets
-      .map((target) => TARGET_SEARCH_TERMS[target] ?? target)
-      .join(" ");
-    const selectedTargetAge = parseTargetAge(filterAge);
-    const targetAge =
-      selectedTargetAge ??
-      (preferredSort === "recommended_desc" ? savedTargetAge : null);
+      !isConditionSearch && selectedCategories.length > 1 ? selectedCategories.join(" ") : "";
+    const regionSearchTerm =
+      !isConditionSearch && selectedRegions.length > 1 ? selectedRegions.join(" ") : "";
+    const targetSearchTerm = !isConditionSearch
+      ? selectedTargets
+        .map((target) => TARGET_SEARCH_TERMS[target] ?? target)
+        .join(" ")
+      : "";
+    const selectedTargetAge = isConditionSearch
+      ? parseTargetAge(filterAge)
+      : profileFilter && typeof profileFilter.target_age === "number"
+        ? profileFilter.target_age
+        : null;
+    const derivedAgeRange = selectedTargetAge !== null
+      ? { min: selectedTargetAge, max: selectedTargetAge, representative: selectedTargetAge }
+      : deriveTargetAgeRangeFromTargets(selectedTargets);
+    const targetAge = derivedAgeRange?.representative ?? null;
+    const ageMin = derivedAgeRange?.min ?? null;
+    const ageMax = derivedAgeRange?.max ?? null;
+    const ageRangePayload =
+      derivedAgeRange !== null && derivedAgeRange !== undefined
+        ? { age_min: ageMin, age_max: ageMax }
+        : {};
     const hardFilterCategory =
       selectedCategories.length === 1
         ? CATEGORY_API_MAP[selectedCategories[0]] ?? selectedCategories[0]
-        : preferredSort === "recommended_desc" && savedCategories.length === 1
-          ? CATEGORY_API_MAP[savedCategories[0]] ?? savedCategories[0]
-          : ALL;
+        : ALL;
     const hardFilterRegion =
       selectedRegions.length === 1
         ? selectedRegions[0]
-        : preferredSort === "recommended_desc" && savedRegions.length === 1
-          ? savedRegions[0]
-          : ALL;
+        : ALL;
     let effectiveQuery = [trimmed, categorySearchTerm, regionSearchTerm, targetSearchTerm]
       .filter(Boolean)
       .join(" ");
 
-    if (preferredSort === "recommended_desc" && effectiveQuery === "") {
+    if (!isConditionSearch && preferredSort === "recommended_desc" && effectiveQuery === "") {
       effectiveQuery = buildRecommendationQueryFromFilters({
-        selectedCategories: selectedCategories.length > 0 ? selectedCategories : savedCategories,
-        selectedRegions: selectedRegions.length > 0 ? selectedRegions : savedRegions,
+        selectedCategories,
+        selectedRegions,
         selectedTargets,
         targetAge,
-        userType: currentUser ? savedFilter?.user_type : null,
+        userType: null,
       });
     }
 
@@ -1022,14 +1272,31 @@ export default function Home() {
     // (마감 포함 조회를 원하는 경우: 모집상태=마감 또는 showClosed=true)
     const includeOnlyOpen =
       effectiveQuery === "" && !selectedStatuses.includes("마감") && !showClosed;
-    if (filterAge.trim() && selectedTargetAge === null) {
+    if (isConditionSearch && filterAge.trim() && selectedTargetAge === null) {
       setError("나이는 0~120 사이의 숫자로 입력해주세요.");
+      return;
+    }
+
+    if (trimmed && !SEARCH_ALLOWED_PATTERN.test(trimmed)) {
+      setError(INVALID_SEARCH_QUERY_MESSAGE);
+      showToast(INVALID_SEARCH_QUERY_MESSAGE);
       return;
     }
 
     setLoading(true);
     setError(null);
     setSearched(true);
+    if (
+      activeSearchTab === "filtered" ||
+      (isConditionSearch &&
+        (selectedCategories.length > 0 ||
+          selectedRegions.length > 0 ||
+          selectedTargets.length > 0 ||
+          selectedStatuses.length > 0 ||
+          Boolean(filterAge.trim())))
+    ) {
+      setActiveSearchTab("filtered");
+    }
     // 검색/필터 시 스크랩만 보기 자동 해제 (append 시는 유지)
     if (!isAppend) {
       setShowScrappedOnly(false);
@@ -1043,6 +1310,7 @@ export default function Home() {
           filter_category: hardFilterCategory,
           filter_region: hardFilterRegion,
           user_age: targetAge,
+          ...ageRangePayload,
           // ☑️수정: 검색어 없을 때만 정렬/페이지네이션 적용 (키워드 검색은 서버 리랭킹 순서 사용)
           ...(effectiveQuery === "" && {
             sort_by: effectiveSortBy,
@@ -1061,7 +1329,7 @@ export default function Home() {
         setResults((prev) => [...prev, ...newResults]);
       } else {
         setResults(newResults);
-        setLastSearchQuery(effectiveQuery);
+        setLastSearchQuery(isConditionSearch ? "" : effectiveQuery);
       }
       // 검색어 없을 때만 페이지네이션 상태 업데이트
       if (effectiveQuery === "") {
@@ -1097,18 +1365,80 @@ export default function Home() {
     setError(null);
     setLastSearchQuery("");
     setSortBy("end_date_asc");
+    if (activeSearchTab === "filtered") {
+      setSearched(true);
+      setBrowseOffset(0);
+      setBrowseHasMore(false);
+      return;
+    }
     // 검색 모드 종료 → 첫 화면(모집중 공고)으로 복귀
     setSearched(false);
     void loadOpenAnnouncements(0, "end_date_asc", false);
   }
 
+  useEffect(() => {
+    if (activeSearchTab !== "filtered") return;
+    const activeFilterKey = JSON.stringify({
+      categories: filterCategories.filter((value) => value !== ALL),
+      regions: filterRegion.filter((value) => value !== ALL),
+      targets: filterTargets.filter((value) => value !== ALL),
+      age: filterAge.trim(),
+      statuses: filterStatus.filter((value) => value !== ALL),
+      showClosed,
+    });
+    const hasActiveCondition =
+      activeFilterKey !==
+      JSON.stringify({
+        categories: [],
+        regions: [],
+        targets: [],
+        age: "",
+        statuses: [],
+        showClosed: false,
+      });
+    // ☑️수정: 조건검색 화면에 들어온 것만으로 전체 공고 자동검색이 한 번 더 돌지 않게 차단
+    if (!hasActiveCondition) {
+      lastAutoFilterSearchKeyRef.current = "";
+      return;
+    }
+    // ☑️수정: 같은 필터 상태로 useEffect가 다시 평가되어도 검색 요청을 누적하지 않음
+    // ☑️수정: 나이 입력이 유효하지 않은 중간 상태이면 조건검색 자동 요청을 보내지 않음
+    if (filterAge.trim() && parseTargetAge(filterAge) === null) {
+      return;
+    }
+    if (lastAutoFilterSearchKeyRef.current === activeFilterKey) return;
+    const timer = window.setTimeout(() => {
+      lastAutoFilterSearchKeyRef.current = activeFilterKey;
+      void handleSearch({
+        sortOverride: toServerSortBy(sortBy),
+        preferredSort: sortBy,
+      });
+    }, 450);
+    return () => window.clearTimeout(timer);
+    // handleSearch intentionally reads the latest filter/search state in this component.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    activeSearchTab,
+    filterCategories,
+    filterRegion,
+    filterTargets,
+    filterAge,
+    filterStatus,
+    showClosed,
+  ]);
+
   async function handleChatSend() {
     const trimmed = chatInput.trim();
     if (!trimmed || chatLoading) return;
+    const pendingOverride = pendingChatOverrideRef.current;
+    const confirmedPendingOverride = Boolean(
+      pendingOverride && isAffirmativeChatReply(trimmed)
+    );
+    const userMessage: ChatMessage = { role: "user", content: trimmed };
 
-    if (isLowSignalChatInput(trimmed)) {
+    if (isLowSignalChatInput(trimmed) && !confirmedPendingOverride) {
       const guideMessage: ChatMessage = { role: "assistant", content: CHAT_INPUT_GUIDE };
-      setChatMessages((prev) => [...prev, guideMessage]);
+      setChatMessages((prev) => [...prev, userMessage, guideMessage]);
       setChatInput("");
       setChatError(null);
       return;
@@ -1121,19 +1451,22 @@ export default function Home() {
     const controller = new AbortController();
     chatAbortRef.current = controller;
 
-    const userMessage: ChatMessage = { role: "user", content: trimmed };
     setChatMessages((prev) => [...prev, userMessage]);
     setChatInput("");
     setChatLoading(true);
     setChatError(null);
 
     try {
+      const messageForApi = confirmedPendingOverride && pendingOverride
+        ? pendingOverride
+        : trimmed;
       const res = await fetch("/api/chat/rag", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          message: trimmed,
+          message: messageForApi,
           history: chatMessages.slice(-8),
+          confirmed_filter_override: confirmedPendingOverride,
         }),
         signal: controller.signal,
       });
@@ -1159,8 +1492,8 @@ export default function Home() {
         ctaLabel:
           data.intent === "ask_profile"
             ? currentUser
-              ? "ë‚´ í”„ë¡œí•„ íŽ¸ì§‘"
-              : "ë¡œê·¸ì¸í•˜ê¸°"
+              ? "내 프로필 편집"
+              : "로그인하기"
             : undefined,
         ctaAction:
           data.intent === "ask_profile"
@@ -1169,6 +1502,14 @@ export default function Home() {
               : "login"
             : undefined,
       };
+      if (
+        data.intent === "confirm_filter_override" &&
+        typeof data.pending_query === "string"
+      ) {
+        pendingChatOverrideRef.current = data.pending_query;
+      } else {
+        pendingChatOverrideRef.current = null;
+      }
       setChatMessages((prev) => [...prev, reply]);
     } catch (e) {
       // AbortError는 사용자가 새 채팅 시작/재요청한 정상 흐름 — 무시
@@ -1187,6 +1528,13 @@ export default function Home() {
         setChatLoading(false);
       }
     }
+  }
+
+  function closeChatPanel() {
+    if (currentUser && chatMessages.length > 0) {
+      void saveCurrentChat(true);
+    }
+    setChatOpen(false);
   }
 
   const statusFilteredResults =
@@ -1220,302 +1568,375 @@ export default function Home() {
   const isInitialLoading = !searched && browseLoading && results.length === 0;
   const isAdmin = currentUser?.role === "admin";
   const hasSearchQueryForRecommendation =
-    query.trim().length > 0 || lastSearchQuery.trim().length > 0;
+    activeSearchTab === "integrated" &&
+    (query.trim().length > 0 || lastSearchQuery.trim().length > 0);
   const hasFilterForRecommendation =
-    filterCategories.some((value) => value !== ALL) ||
-    filterRegion.some((value) => value !== ALL) ||
-    filterTargets.some((value) => value !== ALL) ||
-    filterAge.trim().length > 0;
-  const hasSavedProfileForRecommendation = Boolean(
-    currentUser &&
-    (
-      savedFilter?.user_type ||
-      savedFilter?.categories?.some(Boolean) ||
-      savedFilter?.regions?.some((value) => Boolean(value && value !== "전국")) ||
-      typeof savedFilter?.target_age === "number"
-    )
-  );
+    activeSearchTab === "filtered" &&
+    (filterCategories.some((value) => value !== ALL) ||
+      filterRegion.some((value) => value !== ALL) ||
+      filterTargets.some((value) => value !== ALL) ||
+      filterAge.trim().length > 0);
   const canSortByRecommended =
     !showScrappedOnly &&
     results.length > 0 &&
-    (hasSearchQueryForRecommendation ||
-      hasFilterForRecommendation ||
-      hasSavedProfileForRecommendation);
+    (hasSearchQueryForRecommendation || hasFilterForRecommendation);
+  const recommendedSortTitle =
+    activeSearchTab === "filtered"
+      ? "선택한 필터를 우선 적용하고, 필터 조건과 의미적으로 가까운 공고를 추천순으로 보여드려요."
+      : hasSearchQueryForRecommendation
+        ? "검색어 의미와 검색어에서 읽어낸 지역/분야/나이 조건을 반영한 추천 순서예요."
+        : "지금 신청 가능한 공고를 기본 추천순으로 보여드려요.";
+  const loadingMessage =
+    sortBy === "recommended_desc"
+      ? "추천순으로 맞는 공고를 찾고 있어요."
+      : activeSearchTab === "filtered"
+        ? "조건에 맞는 공고를 불러오고 있어요."
+        : "검색 결과를 불러오고 있어요.";
+  // ☑️수정: AI 추천 공고 카드에는 로그인 사용자의 프로필 조건을 짧은 칩으로 표시
+  const profileSummaryChips = [
+    typeof savedFilter?.target_age === "number" ? `나이 ${savedFilter.target_age}세` : null,
+    savedFilter?.regions?.[0] && savedFilter.regions[0] !== "전국" ? `지역 ${savedFilter.regions[0]}` : null,
+    savedFilter?.user_type ? `유형 ${savedFilter.user_type}` : null,
+    savedFilter?.categories?.[0] ? `관심분야 ${savedFilter.categories[0]}` : null,
+  ].filter((value): value is string => Boolean(value));
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-950">
-      <AppHeader currentUser={currentUser} onAuthChange={handleHeaderAuthChange} />
+      <AppHeader
+        currentUser={currentUser}
+        onAuthChange={handleHeaderAuthChange}
+        hideGlobalChat
+        centerSlot={
+          <HeaderSearchTabs
+            activeTab={activeSearchTab}
+            onSelect={(tab) => {
+              if (tab === "filtered") {
+                focusConditionFilters();
+                return;
+              }
+              setActiveSearchTab("integrated");
+            }}
+          />
+        }
+      />
       <main className="mx-auto max-w-[1280px] px-4 py-6 sm:px-6">
-        <section className="mb-6 overflow-hidden rounded-[24px] bg-gradient-to-br from-blue-600 to-blue-800 px-5 py-10 text-center text-white shadow-sm sm:px-8 sm:py-12">
-          <h1 className="text-2xl font-bold leading-tight [word-break:keep-all] sm:text-3xl">
-            나에게 맞는 정책을 찾아보세요
-          </h1>
-          <p className="mt-3 text-sm text-blue-100">전국 정책을 한 곳에서 탐색하고 스크랩하세요</p>
-          <div className="mx-auto mt-7 flex max-w-2xl items-center gap-2 rounded-2xl bg-white p-2 shadow-lg">
-            <span className="pl-3 text-slate-400">⌕</span>
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleSearch();
-              }}
-              placeholder="정책명, 키워드, 기관명으로 검색하세요"
-              className="min-w-0 flex-1 bg-transparent px-2 py-2.5 text-left text-sm text-slate-900 outline-none placeholder:text-slate-400"
-            />
-            <button
-              type="button"
-              onClick={() => handleSearch()}
-              disabled={loading}
-              className="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {loading ? "검색중" : "검색"}
-            </button>
-          </div>
-          <div className="mt-5 flex flex-wrap items-center justify-center gap-2 text-xs">
-            <span className="font-semibold text-blue-100">인기 검색어:</span>
-            {["청년 월세 지원", "창업 지원금", "취업 수당", "문화누리카드"].map((keyword) => (
-              <button
-                key={keyword}
-                type="button"
-                onClick={() => setQuery(keyword)}
-                className="rounded-full bg-white/15 px-3 py-1.5 font-semibold text-white hover:bg-white/25"
-              >
-                {keyword}
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="mb-6 grid gap-5 lg:grid-cols-[1.35fr_0.95fr]">
-          <div className="overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm">
-            <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <p className="text-sm font-bold text-blue-600">AI 추천 공고</p>
-                <h2 className="mt-2 text-xl font-bold text-slate-950">
-                  조건을 설정하면, 내 조건에 맞는 정책을 추천해드려요!
-                </h2>
-                <p className="mt-2 max-w-xl text-sm leading-6 text-slate-600">
-                  지역, 나이, 관심 분야와 스크랩 이력을 바탕으로 추천할 만한 공고를 카드로 보여드려요.
-                </p>
+        {activeSearchTab === "integrated" && (
+          <>
+            <section className="mb-6 overflow-hidden rounded-[24px] bg-gradient-to-br from-blue-600 to-blue-800 px-5 py-10 text-center text-white shadow-sm sm:px-8 sm:py-12">
+              <h1 className="text-2xl font-bold leading-tight [word-break:keep-all] sm:text-3xl">
+                나에게 맞는 정책을 찾아보세요
+              </h1>
+              <p className="mt-3 text-sm text-blue-100">전국 정책을 한 곳에서 탐색하고 스크랩하세요</p>
+              <div className="mx-auto mt-7 flex max-w-2xl items-center gap-2 rounded-2xl bg-white p-2 shadow-lg">
+                <span className="pl-3 text-slate-400">⌕</span>
+                <input
+                  type="text"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleSearch();
+                  }}
+                  placeholder="정책명, 키워드, 기관명으로 검색하세요"
+                  className="min-w-0 flex-1 bg-transparent px-2 py-2.5 text-left text-sm text-slate-900 outline-none placeholder:text-slate-400"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleSearch()}
+                  disabled={loading}
+                  className="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {loading ? "검색중" : "검색"}
+                </button>
               </div>
-              {currentUser ? (
-                <button
-                  type="button"
-                  onClick={requestProfileRecommendation}
-                  className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-blue-700"
-                >
-                  AI 추천
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => openAuthDialog("login")}
-                  className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-blue-700"
-                >
-                  맞춤 정보 확인하기
-                </button>
+              {currentUser && savedFilter && (
+                <label className="mx-auto mt-3 flex w-fit cursor-pointer items-center gap-2 rounded-full bg-white/15 px-3 py-1.5 text-xs font-semibold text-white">
+                  <input
+                    type="checkbox"
+                    checked={useSavedFilterForSearch}
+                    onChange={(event) => setUseSavedFilterForSearch(event.target.checked)}
+                    className="h-3.5 w-3.5 rounded border-white/50 text-blue-600 focus:ring-white"
+                  />
+                  내 프로필 조건 함께 반영
+                </label>
               )}
-            </div>
-            <div className="grid gap-3 border-t border-slate-100 bg-slate-50/70 p-4 sm:grid-cols-2">
-              {currentUser && mainRecommendationsLoading ? (
-                <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-white px-4 py-5 text-sm text-slate-500">
-                  맞춤 추천을 불러오고 있어요.
-                </div>
-              ) : currentUser && mainRecommendations.length > 0 ? (
-                mainRecommendations.slice(0, 3).map((item) => (
-                  <a
-                    key={item.id}
-                    href={item.detail_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left transition hover:border-blue-200 hover:bg-blue-50"
+              <div className="mt-5 flex flex-wrap items-center justify-center gap-2 text-xs">
+                <span className="font-semibold text-blue-100">인기 검색어:</span>
+                {["청년 월세 지원", "창업 지원금", "취업 수당", "문화누리카드"].map((keyword) => (
+                  <button
+                    key={keyword}
+                    type="button"
+                    onClick={() => setQuery(keyword)}
+                    className="rounded-full bg-white/15 px-3 py-1.5 font-semibold text-white hover:bg-white/25"
                   >
-                    <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-blue-600">
-                      <span>{item.s_category ?? "맞춤 정책"}</span>
-                      {item.region && <span className="text-slate-400">· {item.region}</span>}
+                    {keyword}
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="mb-6 grid gap-5 lg:grid-cols-[1.35fr_0.95fr]">
+              <div className="overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm">
+                <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-sm font-bold text-blue-600">AI 추천 공고</p>
+                    <h2 className="mt-2 text-xl font-bold text-slate-950">
+                      조건을 설정하면, 내 조건에 맞는 정책을 추천해드려요!
+                    </h2>
+                    {currentUser ? (
+                      profileSummaryChips.length > 0 && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {/* ☑️수정: 로그인 상태에서는 설명 문장 대신 user_info 기반 프로필 요약 표시 */}
+                          {profileSummaryChips.map((chip) => (
+                            <span
+                              key={chip}
+                              className="rounded-full bg-blue-600 px-3 py-1.5 text-xs font-bold text-white"
+                            >
+                              {chip}
+                            </span>
+                          ))}
+                        </div>
+                      )
+                    ) : (
+                      <p className="mt-2 max-w-xl text-sm leading-6 text-slate-600">
+                        지역, 나이, 관심 분야와 스크랩 이력을 바탕으로 추천할 만한 공고를 카드로 보여드려요.
+                      </p>
+                    )}
+                  </div>
+                  {currentUser ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        window.location.href = "/profile";
+                      }}
+                      className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-blue-700"
+                    >
+                      {/* ☑️수정: 로그인 상태의 왼쪽 카드 버튼은 프로필 조건 변경 화면으로 이동 */}
+                      조건 변경
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => openAuthDialog("login")}
+                      className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-blue-700"
+                    >
+                      맞춤 정보 확인하기
+                    </button>
+                  )}
+                </div>
+                <div className="grid gap-3 border-t border-slate-100 bg-slate-50/70 p-4 sm:grid-cols-2">
+                  {currentUser && mainRecommendationsLoading ? (
+                    <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-white px-4 py-5 text-sm text-slate-500">
+                      맞춤 추천을 불러오고 있어요.
                     </div>
-                    <p className="mt-2 line-clamp-2 text-sm font-bold text-slate-900">
-                      {item.title}
+                  ) : currentUser && mainRecommendations.length > 0 ? (
+                    mainRecommendations.slice(0, 3).map((item) => (
+                      <a
+                        key={item.id}
+                        href={item.detail_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left transition hover:border-blue-200 hover:bg-blue-50"
+                      >
+                        <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-blue-600">
+                          <span>{item.s_category ?? "맞춤 정책"}</span>
+                          {item.region && <span className="text-slate-400">· {item.region}</span>}
+                        </div>
+                        <p className="mt-2 line-clamp-2 text-sm font-bold text-slate-900">
+                          {item.title}
+                        </p>
+                        <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">
+                          {item.reason ?? item.summary ?? "내 프로필과 스크랩 이력을 바탕으로 가져온 추천입니다."}
+                        </p>
+                      </a>
+                    ))
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={requestProfileRecommendation}
+                        className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50"
+                      >
+                        내 조건 기반
+                      </button>
+                      <button
+                        type="button"
+                        onClick={requestScrapRecommendation}
+                        className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50"
+                      >
+                        스크랩 취향 반영
+                      </button>
+                    </>
+                  )}
+                  {currentUser && mainRecommendationsError && (
+                    <p className="sm:col-span-2 text-xs text-amber-700">
+                      {mainRecommendationsError}
                     </p>
-                    <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">
-                      {item.reason ?? item.summary ?? "내 프로필과 스크랩 이력을 바탕으로 가져온 추천입니다."}
-                    </p>
-                  </a>
-                ))
-              ) : (
-                <>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <p className="text-sm font-bold text-slate-950">채팅봇 추천</p>
                   <button
                     type="button"
                     onClick={requestProfileRecommendation}
-                    className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50"
+                    className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-blue-700"
                   >
-                    내 조건 기반
+                    {/* ☑️수정: 기존 AI 추천 동작은 채팅봇 추천 카드 상단 버튼으로 이동 */}
+                    AI 추천
+                  </button>
+                </div>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  추천 기준을 고르면 AI봇이 이유까지 함께 설명해드려요.
+                </p>
+                <div className="mt-4 grid gap-2">
+                  <button
+                    type="button"
+                    onClick={requestProfileRecommendation}
+                    className="rounded-xl border border-slate-200 px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50"
+                  >
+                    내 조건에 맞는 공고 물어보기
                   </button>
                   <button
                     type="button"
                     onClick={requestScrapRecommendation}
-                    className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50"
+                    className="rounded-xl border border-slate-200 px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50"
                   >
-                    스크랩 취향 반영
+                    스크랩한 정책과 비슷한 공고 물어보기
                   </button>
-                </>
-              )}
-              {currentUser && mainRecommendationsError && (
-                <p className="sm:col-span-2 text-xs text-amber-700">
-                  {mainRecommendationsError}
-                </p>
-              )}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <p className="text-sm font-bold text-slate-950">채팅봇 추천</p>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              추천 기준을 고르면 AI봇이 이유까지 함께 설명해드려요.
-            </p>
-            <div className="mt-4 grid gap-2">
-              <button
-                type="button"
-                onClick={requestProfileRecommendation}
-                className="rounded-xl border border-slate-200 px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50"
-              >
-                내 조건에 맞는 공고 물어보기
-              </button>
-              <button
-                type="button"
-                onClick={requestScrapRecommendation}
-                className="rounded-xl border border-slate-200 px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50"
-              >
-                스크랩한 정책과 비슷한 공고 물어보기
-              </button>
-            </div>
-          </div>
-        </section>
-
-        <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
-          <aside
-            className={`h-fit rounded-lg border bg-white shadow-sm transition ${highlightFilter
-              ? "border-blue-400 ring-4 ring-blue-100"
-              : "border-slate-200"
-              }`}
-          >
-            <div className="flex items-center justify-between border-b border-slate-100 px-4 py-4">
-              <h2 className="text-base font-bold text-slate-950">필터</h2>
-              <button type="button" onClick={handleResetFilters} className="text-xs font-bold text-slate-400 hover:text-blue-700">
-                초기화
-              </button>
-            </div>
-
-            <div className="space-y-5 p-4">
-              <MultiChipFilter
-                label="분야"
-                values={filterCategories}
-                options={CATEGORY_OPTIONS}
-                onChange={setFilterCategories}
-              />
-              <div>
-                <p className="mb-3 text-sm font-bold text-slate-700">대상</p>
-                <div className="flex flex-wrap gap-2">
-                  <MultiChipFilter
-                    label=""
-                    values={filterTargets}
-                    options={TARGET_OPTIONS}
-                    onChange={(values) => {
-                      setFilterTargets(values);
-                      const ageTargets = values.filter((value) => TARGET_AGE_PRESETS[value]);
-                      if (ageTargets.length === 1) {
-                        setFilterAge(TARGET_AGE_PRESETS[ageTargets[0]]);
-                      }
-                    }}
-                    hideLabel
-                  />
                 </div>
               </div>
-              <MultiChipFilter
-                label="지역"
-                values={filterRegion}
-                options={REGION_OPTIONS}
-                onChange={setFilterRegion}
-              />
-              <MultiChipFilter
-                label="상태"
-                values={filterStatus}
-                options={STATUSES as readonly string[]}
-                onChange={setFilterStatus}
-              />
-              <label className="block">
-                <span className="mb-2 block text-sm font-bold text-slate-700">나이</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={120}
-                  value={filterAge}
-                  onChange={(e) => setFilterAge(e.target.value)}
-                  placeholder="예: 25"
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </label>
-              <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-slate-600">
-                <input
-                  type="checkbox"
-                  checked={showClosed}
-                  onChange={(e) => setShowClosed(e.target.checked)}
-                  className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                />
-                마감 공고 포함
-              </label>
+            </section>
+          </>
+        )}
 
-              <div className="border-t border-slate-100 pt-5">
-                {currentUser && (
-                  <div className="grid gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void saveCurrentFilter()}
-                      className="rounded-xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
-                    >
-                      현재 필터 저장
-                    </button>
-                    <button
-                      type="button"
-                      onClick={applySavedFilter}
-                      disabled={!savedFilter}
-                      className="rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      저장 필터 적용
-                    </button>
-                  </div>
-                )}
+        <div className={`grid gap-6 ${activeSearchTab === "filtered" ? "lg:grid-cols-[260px_1fr]" : "lg:grid-cols-1"}`}>
+          {activeSearchTab === "filtered" && (
+            <aside
+              ref={filterPanelRef}
+              className={`h-fit rounded-lg border bg-white shadow-sm transition ${highlightFilter
+                ? "border-blue-400 ring-4 ring-blue-100"
+                : "border-slate-200"
+                }`}
+            >
+              <div className="flex items-center justify-between border-b border-slate-100 px-4 py-4">
+                <h2 className="text-base font-bold text-slate-950">필터</h2>
+                <button type="button" onClick={handleResetFilters} className="text-xs font-bold text-slate-400 hover:text-blue-700">
+                  초기화
+                </button>
+              </div>
 
-                <div className="mt-3 rounded-2xl bg-slate-50 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-semibold text-slate-700">
-                      스크랩 {scrappedIds.size}개
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowScrappedOnly((value) => {
-                          const next = !value;
-                          if (next) setSearched(true);
-                          return next;
-                        });
+              <div className="space-y-5 p-4">
+                <MultiChipFilter
+                  label="분야"
+                  values={filterCategories}
+                  options={CATEGORY_OPTIONS}
+                  onChange={setFilterCategories}
+                />
+                <div>
+                  <p className="mb-3 text-sm font-bold text-slate-700">대상</p>
+                  <div className="flex flex-wrap gap-2">
+                    <MultiChipFilter
+                      label=""
+                      values={filterTargets}
+                      options={TARGET_OPTIONS}
+                      onChange={(values) => {
+                        setFilterTargets(values);
                       }}
-                      disabled={!showScrappedOnly && scrappedIds.size === 0}
-                      className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${showScrappedOnly
-                        ? "border-amber-300 bg-amber-100 text-amber-800"
-                        : "border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
-                        }`}
-                    >
-                      {showScrappedOnly ? "전체 결과 보기" : "스크랩만 보기"}
-                    </button>
+                      hideLabel
+                    />
                   </div>
-                  {uiMessage && (
-                    <p className="mt-3 text-xs leading-5 text-slate-500">{uiMessage}</p>
+                </div>
+                <MultiChipFilter
+                  label="지역"
+                  values={filterRegion}
+                  options={REGION_OPTIONS}
+                  onChange={setFilterRegion}
+                />
+                <MultiChipFilter
+                  label="상태"
+                  values={filterStatus}
+                  options={STATUSES as readonly string[]}
+                  onChange={setFilterStatus}
+                />
+                <label className="block">
+                  <span className="mb-2 block text-sm font-bold text-slate-700">나이</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={120}
+                    value={filterAge}
+                    onChange={(e) => setFilterAge(e.target.value)}
+                    placeholder="예: 25"
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={showClosed}
+                    onChange={(e) => setShowClosed(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  마감 공고 포함
+                </label>
+
+                <div className="border-t border-slate-100 pt-5">
+                  {currentUser && (
+                    <div className="grid gap-2">
+                      {/* ☑️수정: P0-0 MVP에서는 user_filters 저장 버튼을 숨김 처리 */}
+                      {SHOW_MVP_FILTER_SAVE_BUTTON && (
+                        <button
+                          type="button"
+                          onClick={() => void saveCurrentFilter()}
+                          className="rounded-xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+                        >
+                          현재 필터 저장
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={applySavedFilter}
+                        disabled={!savedFilter}
+                        className="rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        내 필터 불러오기
+                      </button>
+                    </div>
                   )}
+
+                  <div className="mt-3 rounded-2xl bg-slate-50 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-sm font-semibold text-slate-700">
+                        스크랩 {scrappedIds.size}개
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowScrappedOnly((value) => {
+                            const next = !value;
+                            if (next) setSearched(true);
+                            return next;
+                          });
+                        }}
+                        disabled={!showScrappedOnly && scrappedIds.size === 0}
+                        className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${showScrappedOnly
+                          ? "border-amber-300 bg-amber-100 text-amber-800"
+                          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
+                          }`}
+                      >
+                        {showScrappedOnly ? "전체 결과 보기" : "스크랩만 보기"}
+                      </button>
+                    </div>
+                    {uiMessage && (
+                      <p className="mt-3 text-xs leading-5 text-slate-500">{uiMessage}</p>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
-          </aside>
+            </aside>
+          )}
 
           <section className="min-w-0">
 
@@ -1527,6 +1948,42 @@ export default function Home() {
             )}
 
             {/* ☑️수정: 정렬 토글 — 추천순/마감순/새 공고순만 표시 */}
+            {!error && (results.length > 0 || searched || activeSearchTab === "filtered") && (
+              <section className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-500">
+                      {activeSearchTab === "filtered" ? "조건검색 화면" : "통합검색 화면"}
+                    </p>
+                    <p className="mt-1 text-sm text-slate-600">
+                      {activeSearchTab === "filtered"
+                        ? "왼쪽 필터를 고르면 조건에 맞는 결과가 자동으로 반영돼요."
+                        : "검색어를 중심으로 전체 공고를 찾고 있어요."}
+                    </p>
+                  </div>
+                  <AppliedSearchChips
+                    activeTab={activeSearchTab}
+                    query={activeSearchTab === "filtered" ? "" : query.trim()}
+                    categories={filterCategories.filter((value) => value !== ALL)}
+                    regions={filterRegion.filter((value) => value !== ALL)}
+                    targets={filterTargets.filter((value) => value !== ALL)}
+                    statuses={filterStatus.filter((value) => value !== ALL)}
+                  />
+                </div>
+              </section>
+            )}
+
+            {loading && !isInitialLoading && (
+              <div
+                role="status"
+                aria-live="polite"
+                className="mb-4 flex items-center justify-center rounded-2xl border border-blue-100 bg-white/90 px-4 py-5 text-sm font-semibold text-blue-700 shadow-sm"
+              >
+                <span className="mr-3 h-4 w-4 animate-spin rounded-full border-2 border-blue-200 border-t-blue-600" />
+                {loadingMessage}
+              </div>
+            )}
+
             {!error && (results.length > 0 || searched) && (
               <section className="mb-4 rounded-lg border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -1547,7 +2004,7 @@ export default function Home() {
                           <button
                             type="button"
                             aria-pressed={sortBy === "recommended_desc"}
-                            title={SORT_DESCRIPTIONS.recommended_desc}
+                            title={recommendedSortTitle}
                             onClick={() => handleSortChange("recommended_desc")}
                             className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors sm:text-sm ${sortBy === "recommended_desc"
                               ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
@@ -1694,15 +2151,19 @@ export default function Home() {
         >
           <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl">
             <h3 className="text-base font-bold text-slate-950">
+              {/* ☑️수정: 프로필 미설정/스크랩 없음 상황별로 팝업 제목 분리 */}
               {recommendPrompt === "profile"
                 ? "맞춤 조건을 먼저 설정할까요?"
-                : "스크랩 취향을 먼저 만들어볼까요?"}
+                : "스크랩한 공고가 없습니다"}
             </h3>
+
             <p className="mt-2 text-sm leading-6 text-slate-600">
+              {/* ☑️수정: user_type은 선택 정보로 완화하고, 팝업 본문을 상황별 안내로 분리 */}
               {recommendPrompt === "profile"
-                ? "마이페이지에서 지역, 나이, 사용자 유형, 관심 분야를 저장하면 AI 추천이 더 정확해집니다."
-                : "관심 있는 정책을 스크랩해두면 비슷한 공고를 더 잘 찾아드릴 수 있습니다."}
+                ? "AI 추천을 받으려면 프로필에서 지역, 나이, 관심 분야를 먼저 저장해주세요."
+                : "아직 스크랩한 공고가 없습니다. 관심 있는 공고를 먼저 스크랩해주세요!"}
             </p>
+
             <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
@@ -1711,20 +2172,24 @@ export default function Home() {
               >
                 아니요
               </button>
+
               <button
                 type="button"
                 onClick={() => {
                   if (recommendPrompt === "profile") {
-                    window.location.href = "/mypage";
+                    // ☑️수정: 프로필 조건 부족 시 마이페이지가 아닌 프로필 편집 화면으로 이동
+                    window.location.href = "/profile";
                     return;
                   }
+
+                  // ☑️수정: 스크랩 없음 케이스는 팝업을 닫고 공고를 둘러볼 수 있게 조건검색 영역으로 이동
                   setRecommendPrompt(null);
-                  setHighlightFilter(true);
-                  window.setTimeout(() => setHighlightFilter(false), 1800);
+                  focusConditionFilters();
                 }}
                 className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
               >
-                예
+                {/* ☑️수정: 상황별 CTA 문구 분리 */}
+                {recommendPrompt === "profile" ? "설정하러 가기" : "공고 둘러보기"}
               </button>
             </div>
           </div>
@@ -1740,7 +2205,7 @@ export default function Home() {
             loading={chatLoading}
             error={chatError}
             onSend={handleChatSend}
-            onClose={() => setChatOpen(false)}
+            onClose={closeChatPanel}
             currentUser={currentUser}
             savedFilter={savedFilter}
             savedChats={savedChats}
@@ -1837,17 +2302,9 @@ export default function Home() {
   );
 }
 
-function toggleMultiValue(current: string[], option: string, options: readonly string[]) {
+function toggleMultiValue(current: string[], option: string) {
   if (option === ALL) return [ALL];
-  const withoutAll = current.filter((value) => value !== ALL);
-  const next = withoutAll.includes(option)
-    ? withoutAll.filter((value) => value !== option)
-    : [...withoutAll, option];
-  const selectableOptions = options.filter((value) => value !== ALL);
-  if (selectableOptions.length > 0 && selectableOptions.every((value) => next.includes(value))) {
-    return [ALL];
-  }
-  return next.length === 0 ? [ALL] : next;
+  return current.includes(option) ? [ALL] : [option];
 }
 
 function MultiChipFilter({
@@ -1874,7 +2331,7 @@ function MultiChipFilter({
             <button
               key={option}
               type="button"
-              onClick={() => onChange(toggleMultiValue([...normalizedValues], option, options))}
+              onClick={() => onChange(toggleMultiValue([...normalizedValues], option))}
               className={`rounded-full border px-3 py-2 text-sm font-semibold transition ${active
                 ? "border-blue-600 bg-blue-600 text-white"
                 : "border-slate-200 bg-white text-slate-600 hover:border-blue-200 hover:bg-blue-50"
@@ -2122,7 +2579,7 @@ function ChatPanel({
                   <div className="min-w-0 flex-1">
                     <div className="rounded-2xl bg-blue-50 px-4 py-3 text-sm text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
                       <p className="mb-1 text-xs font-semibold text-blue-700 dark:text-blue-300">
-                        ì¶”ì²œ ì´ìœ
+                        추천 이유
                       </p>
                       <p className="whitespace-pre-wrap break-words">
                         {msg.content}
@@ -2178,7 +2635,7 @@ function ChatPanel({
                   onSend();
                 }
               }}
-              placeholder="예: 청년 창업 지원"
+              placeholder="예: 부산 거주 28살 예비창업자 자금 지원"
               disabled={loading}
               className="min-w-0 flex-1 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900"
             />

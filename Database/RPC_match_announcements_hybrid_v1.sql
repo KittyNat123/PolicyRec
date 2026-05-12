@@ -56,30 +56,25 @@ BEGIN
   FROM announcements a
   WHERE
     a.embedding IS NOT NULL
-
-    -- 유사도가 기준값보다 높은 공고만 반환합니다.
     AND 1 - (a.embedding <=> query_embedding) > match_threshold
 
-    -- 카테고리 필터입니다.
-    -- NULL 또는 '전체'면 카테고리 필터를 적용하지 않습니다.
+    -- 카테고리 필터: NULL 또는 '전체'면 적용하지 않는다.
     AND (
       filter_category IS NULL
       OR filter_category = '전체'
       OR a.s_category = filter_category
     )
 
-    -- 지역 필터입니다.
-    -- NULL 또는 '전체'면 지역 필터를 적용하지 않습니다.
-    -- 특정 지역을 고르면 해당 지역 공고와 '전국' 공고를 함께 보여줍니다.
+    -- 지역 필터: 특정 지역 공고와 전국 공고를 함께 보여준다.
     AND (
       filter_region IS NULL
       OR filter_region = '전체'
+      OR filter_region = '전국'
       OR a.region = filter_region
       OR a.region = '전국'
     )
 
-    -- 나이 필터입니다.
-    -- target_age_min/max가 NULL이면 제한 없음으로 봅니다.
+    -- 나이 필터: min/max가 NULL이면 제한 없음으로 본다.
     AND (
       user_age IS NULL
       OR (

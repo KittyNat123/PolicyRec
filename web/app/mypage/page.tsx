@@ -159,7 +159,7 @@ export default function MyPage() {
               <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <p className="text-sm font-semibold text-blue-600">내 프로필 정보</p>
-                  <h2 className="mt-1 text-xl font-bold">DB 저장 프로필</h2>
+                  <h2 className="mt-1 text-xl font-bold">프로필 정보</h2>
                 </div>
                 <button
                   type="button"

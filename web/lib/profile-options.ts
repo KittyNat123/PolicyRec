@@ -40,8 +40,7 @@ export const CATEGORIES = [
 export const USER_TYPES = [
   "선택 안함",
   "청년",
-  "중장년",
-  "노인",
+  "시니어",
   "장애인",
   "저소득",
   "학생",
@@ -54,8 +53,7 @@ export const USER_TYPES = [
 export const TARGET_OPTIONS = [
   ALL_OPTION,
   "청년",
-  "중장년",
-  "노인",
+  "시니어",
   "장애인",
   "저소득",
   "학생",

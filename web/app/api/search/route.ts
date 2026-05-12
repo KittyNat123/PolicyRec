@@ -281,6 +281,21 @@ function buildRegionCandidates(filterRegion: string): string[] {
   return Array.from(new Set([...group, NATIONWIDE_REGION]));
 }
 
+function ageWindowMatches(
+  row: Record<string, unknown>,
+  ageMin: number | null,
+  ageMax: number | null
+) {
+  if (ageMin === null && ageMax === null) return true;
+  const rowMin = toNullableNumber(row.target_age_min);
+  const rowMax = toNullableNumber(row.target_age_max);
+  const policyMin = rowMin ?? Number.NEGATIVE_INFINITY;
+  const policyMax = rowMax ?? Number.POSITIVE_INFINITY;
+  const selectedMin = ageMin ?? Number.NEGATIVE_INFINITY;
+  const selectedMax = ageMax ?? Number.POSITIVE_INFINITY;
+  return policyMin <= selectedMax && policyMax >= selectedMin;
+}
+
 function calculateFinalScore(
   row: Record<string, unknown>,
   similarity: number,
@@ -365,7 +380,9 @@ function applyResultFilters(
   rows: Array<Record<string, unknown>>,
   filterCategory: string | null,
   filterRegion: string | null,
-  userAge: number | null
+  userAge: number | null,
+  ageMin: number | null = userAge,
+  ageMax: number | null = userAge
 ) {
   let filtered = rows.map(normalizeResultRow);
   if (filterCategory) {
@@ -378,14 +395,8 @@ function applyResultFilters(
       (r) => typeof r.region === "string" && regionCandidates.has(r.region)
     );
   }
-  if (userAge !== null) {
-    filtered = filtered.filter((r) => {
-      const min = toNullableNumber(r.target_age_min);
-      const max = toNullableNumber(r.target_age_max);
-      const okMin = min === null || min <= userAge;
-      const okMax = max === null || max >= userAge;
-      return okMin && okMax;
-    });
+  if (ageMin !== null || ageMax !== null) {
+    filtered = filtered.filter((r) => ageWindowMatches(r, ageMin, ageMax));
   }
   return filtered;
 }
@@ -406,6 +417,9 @@ type FilterQueryOptions = {
   offset?: number;
   limit?: number;
   onlyOpen?: boolean;
+  hasAgeRange?: boolean;
+  ageMin?: number | null;
+  ageMax?: number | null;
 };
 
 function buildFilteredAnnouncementsQuery(
@@ -426,6 +440,12 @@ function buildFilteredAnnouncementsQuery(
   }
   if (filterRegion) {
     tableQuery = tableQuery.in("region", buildRegionCandidates(filterRegion));
+  }
+  if (options.ageMin !== null && options.ageMin !== undefined) {
+    tableQuery = tableQuery.or(`target_age_max.is.null,target_age_max.gte.${options.ageMin}`);
+  }
+  if (options.ageMax !== null && options.ageMax !== undefined) {
+    tableQuery = tableQuery.or(`target_age_min.is.null,target_age_min.lte.${options.ageMax}`);
   }
   if (options.onlyOpen) {
     const today = toKstDateKey(new Date()); // YYYY-MM-DD (KST)
@@ -485,11 +505,15 @@ async function searchByFiltersOnly(
   }
 
   const rows = (data ?? []) as unknown as Array<Record<string, unknown>>;
+  const filterAgeMin = options.hasAgeRange ? options.ageMin ?? null : userAge;
+  const filterAgeMax = options.hasAgeRange ? options.ageMax ?? null : userAge;
   const filtered = applyResultFilters(
     rows,
     filterCategory,
     filterRegion,
-    userAge
+    userAge,
+    filterAgeMin,
+    filterAgeMax
   );
   const hasMore = filtered.length > requestedLimit;
   const results = filtered.slice(0, requestedLimit).map((row) => ({
@@ -552,6 +576,9 @@ export async function POST(request: NextRequest) {
     const filterRegion =
       rawFilterRegion && rawFilterRegion !== "전체" ? rawFilterRegion : null;
     const userAge = toNullableNumber(body.user_age);
+    const hasAgeRange = "age_min" in body || "age_max" in body;
+    const requestAgeMin = hasAgeRange ? toNullableNumber(body.age_min) : userAge;
+    const requestAgeMax = hasAgeRange ? toNullableNumber(body.age_max) : userAge;
 
     // 첫 화면 모집중 공고용 추가 파라미터 (검색어 없을 때만 의미 있음)
     const sortBy: "end_date_asc" | "start_date_desc" =
@@ -574,6 +601,9 @@ export async function POST(request: NextRequest) {
           offset,
           limit: limit ?? undefined,
           onlyOpen,
+          hasAgeRange,
+          ageMin: requestAgeMin,
+          ageMax: requestAgeMax,
         }
       );
 
@@ -609,7 +639,15 @@ export async function POST(request: NextRequest) {
     // 사용자가 UI로 고른 값만 하드 필터로 적용합니다.
     const effectiveFilterCategory = filterCategory;
     const effectiveFilterRegion = filterRegion ?? selfQuery?.region ?? null;
-    const effectiveUserAge = userAge ?? selfQuery?.target_age ?? null;
+    const selfQueryAge = selfQuery?.target_age ?? null;
+    const effectiveAgeMin = hasAgeRange ? requestAgeMin : requestAgeMin ?? selfQueryAge;
+    const effectiveAgeMax = hasAgeRange ? requestAgeMax : requestAgeMax ?? selfQueryAge;
+    const effectiveUserAge =
+      userAge ??
+      selfQueryAge ??
+      (effectiveAgeMin !== null && effectiveAgeMax !== null
+        ? Math.round((effectiveAgeMin + effectiveAgeMax) / 2)
+        : effectiveAgeMin ?? effectiveAgeMax);
     const uiFiltersComplete = Boolean(filterCategory && filterRegion);
     const embeddingQuery = chooseEmbeddingQuery(query, selfQuery, uiFiltersComplete);
 
@@ -641,7 +679,14 @@ export async function POST(request: NextRequest) {
       );
       let results: NormalizedResultRow[] = [];
       if (richError || !richRowsRaw) {
-        results = hybridRows.map(normalizeResultRow);
+        results = applyResultFilters(
+          hybridRows.map(normalizeResultRow),
+          effectiveFilterCategory,
+          effectiveFilterRegion,
+          effectiveUserAge,
+          effectiveAgeMin,
+          effectiveAgeMax
+        );
       } else {
         const mappedRows = ((richRowsRaw ?? []) as Array<Record<string, unknown>>).map((row) => {
           const similarity = similarityById.get(row.id as number) ?? 0;
@@ -669,9 +714,14 @@ export async function POST(request: NextRequest) {
           userAge: effectiveUserAge,
         });
 
-        results = mappedRows
-          .sort(compareByFinalScoreDescThenIdAsc)
-          .map(normalizeResultRow);
+        results = applyResultFilters(
+          mappedRows.sort(compareByFinalScoreDescThenIdAsc).map(normalizeResultRow),
+          effectiveFilterCategory,
+          effectiveFilterRegion,
+          effectiveUserAge,
+          effectiveAgeMin,
+          effectiveAgeMax
+        );
       }
       const resultsWithScrapCounts = await attachScrapCounts(results);
       return NextResponse.json({
@@ -747,7 +797,9 @@ export async function POST(request: NextRequest) {
         basicRows.map(normalizeResultRow),
         effectiveFilterCategory,
         effectiveFilterRegion,
-        effectiveUserAge
+        effectiveUserAge,
+        effectiveAgeMin,
+        effectiveAgeMax
       ).slice(0, DEFAULT_MATCH_COUNT);
       return NextResponse.json({
         results: await attachScrapCounts(fallbackRows),
@@ -798,7 +850,9 @@ export async function POST(request: NextRequest) {
       merged.map(normalizeResultRow),
       effectiveFilterCategory,
       effectiveFilterRegion,
-      effectiveUserAge
+      effectiveUserAge,
+      effectiveAgeMin,
+      effectiveAgeMax
     ).slice(0, DEFAULT_MATCH_COUNT);
 
     return NextResponse.json({

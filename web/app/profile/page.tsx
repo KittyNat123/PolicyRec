@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppHeader } from "@/components/AppHeader";
@@ -18,9 +19,31 @@ type UserInfo = {
   user_type?: string | null;
 };
 
+type NotificationSettings = {
+  deadline_notice: boolean;
+  recommendation_notice: boolean;
+  scrap_activity_notice: boolean;
+};
+
+const DEFAULT_NOTIFICATIONS: NotificationSettings = {
+  deadline_notice: true,
+  recommendation_notice: true,
+  scrap_activity_notice: false,
+};
+// ☑️수정: 알림 설정은 실제 DB/API 확인 전까지 프로필 화면에서 보류
+const SHOW_NOTIFICATION_SETTINGS = false;
+
 async function readApiError(response: Response, fallback: string) {
   const data = await response.json().catch(() => ({}));
   return data.error ?? fallback;
+}
+
+function displayValue(value: string | null | undefined, fallback = "미설정") {
+  return value && value.trim() ? value : fallback;
+}
+
+function categoryText(categories: readonly string[]) {
+  return categories.length > 0 ? categories.join(", ") : "미설정";
 }
 
 export default function ProfilePage() {
@@ -28,6 +51,9 @@ export default function ProfilePage() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [savedFilter, setSavedFilter] = useState<SavedFilter | null>(null);
   const [info, setInfo] = useState<UserInfo | null>(null);
+  const [notifications, setNotifications] =
+    useState<NotificationSettings>(DEFAULT_NOTIFICATIONS);
+  const [notificationSetupRequired, setNotificationSetupRequired] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
@@ -41,9 +67,6 @@ export default function ProfilePage() {
   const [formRegion, setFormRegion] = useState(ALL_OPTION);
   const [formCategory, setFormCategory] = useState(ALL_OPTION);
   const [formUserType, setFormUserType] = useState<string>(USER_TYPES[0]);
-  const [deadlineNotice, setDeadlineNotice] = useState(true);
-  const [recommendNotice, setRecommendNotice] = useState(true);
-  const [applicationNotice, setApplicationNotice] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -61,9 +84,13 @@ export default function ProfilePage() {
           return;
         }
 
-        const infoRes = await fetch("/api/mypage/info", { cache: "no-store" });
+        const [infoRes, notificationRes] = await Promise.all([
+          fetch("/api/mypage/info", { cache: "no-store" }),
+          fetch("/api/user/notification-settings", { cache: "no-store" }),
+        ]);
+
         if (!infoRes.ok && infoRes.status !== 401) {
-          throw new Error(await readApiError(infoRes, "프로필 정보를 불러오지 못했습니다."));
+          throw new Error(await readApiError(infoRes, "프로필 정보를 불러오지 못했어요."));
         }
 
         const infoData = await infoRes.json().catch(() => ({}));
@@ -77,8 +104,16 @@ export default function ProfilePage() {
         setFormRegion(loadedInfo?.region ?? loadedInfo?.regions?.[0] ?? ALL_OPTION);
         setFormCategory(loadedInfo?.categories?.[0] ?? ALL_OPTION);
         setFormUserType(loadedInfo?.user_type ?? USER_TYPES[0]);
+
+        if (notificationRes.ok) {
+          const notificationData = await notificationRes.json().catch(() => ({}));
+          setNotifications(
+            (notificationData.settings ?? DEFAULT_NOTIFICATIONS) as NotificationSettings
+          );
+          setNotificationSetupRequired(Boolean(notificationData.setup_required));
+        }
       } catch (e) {
-        setError(e instanceof Error ? e.message : "프로필 정보를 불러오지 못했습니다.");
+        setError(e instanceof Error ? e.message : "프로필 정보를 불러오지 못했어요.");
       } finally {
         setLoading(false);
       }
@@ -86,14 +121,23 @@ export default function ProfilePage() {
   }, [router]);
 
   const displayName = info?.name || info?.nickname || currentUser?.login_id || "사용자";
-  const nickname = info?.nickname || displayName;
-  const age = info?.age_group || savedFilter?.target_age?.toString() || "미입력";
-  const region = info?.region || info?.regions?.[0] || savedFilter?.regions?.[0] || "미설정";
-  const userType = info?.user_type || "미설정";
+  const nickname = info?.nickname || "미설정";
+  const ageValue = info?.age_group || savedFilter?.target_age?.toString() || "";
+  const age = ageValue ? `${ageValue}세` : "미설정";
+  const region = displayValue(
+    info?.region || info?.regions?.[0] || savedFilter?.regions?.[0]
+  );
+  const userType = displayValue(info?.user_type);
   const email = info?.email || `${currentUser?.login_id ?? "user"}@policyrec.local`;
   const phone = info?.phone || "미입력";
   const categories = info?.categories?.length ? info.categories : savedFilter?.categories ?? [];
-  const targets = [userType, age === "미입력" ? null : `${age}세`, region].filter(Boolean) as string[];
+  const primaryCategory = categories[0] ?? "미설정";
+  const summaryChips = [
+    `나이 ${age}`,
+    `지역 ${region}`,
+    `유형 ${userType}`,
+    `관심분야 ${primaryCategory}`,
+  ];
 
   async function saveProfile() {
     setSaving(true);
@@ -117,6 +161,10 @@ export default function ProfilePage() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "프로필 저장에 실패했습니다.");
 
+      if (data.success === false) {
+        throw new Error(data.warning ?? data.error ?? "프로필 일부 항목이 DB에 저장되지 않았습니다.");
+      }
+
       const nextInfo = (data.info ?? {
         ...info,
         name: formName,
@@ -131,9 +179,7 @@ export default function ProfilePage() {
       }) as UserInfo;
 
       setInfo(nextInfo);
-      if (data.filter) {
-        setSavedFilter(data.filter as SavedFilter);
-      }
+      if (data.filter) setSavedFilter(data.filter as SavedFilter);
       setFormName(nextInfo.name ?? nextInfo.nickname ?? "");
       setFormNickname(nextInfo.nickname ?? nextInfo.name ?? "");
       setFormEmail(nextInfo.email ?? "");
@@ -143,23 +189,37 @@ export default function ProfilePage() {
       setFormCategory(nextInfo.categories?.[0] ?? ALL_OPTION);
       setFormUserType(nextInfo.user_type ?? USER_TYPES[0]);
       setEditOpen(false);
+      setMessage("프로필을 저장했습니다.");
 
-      if (data.setup_required && Array.isArray(data.missing_columns)) {
-        setMessage(`일부 컬럼이 DB에 아직 반영되지 않았습니다: ${data.missing_columns.join(", ")}`);
-      } else {
-        setMessage("프로필을 저장했습니다.");
-      }
-      if (
-        !data.setup_required &&
-        window.sessionStorage.getItem("policyrec-pending-chat-prompt")
-      ) {
+      if (window.sessionStorage.getItem("policyrec-pending-chat-prompt")) {
         router.push("/");
-        return;
       }
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "프로필 저장에 실패했습니다.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function saveNotificationSettings(next: NotificationSettings) {
+    setNotifications(next);
+    setMessage(null);
+    try {
+      const res = await fetch("/api/user/notification-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(next),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setNotificationSetupRequired(Boolean(data.setup_required));
+        throw new Error(data.error ?? "알림 설정 저장에 실패했습니다.");
+      }
+      setNotifications((data.settings ?? next) as NotificationSettings);
+      setNotificationSetupRequired(Boolean(data.setup_required));
+      setMessage("알림 설정을 저장했습니다.");
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "알림 설정 저장에 실패했습니다.");
     }
   }
 
@@ -189,15 +249,22 @@ export default function ProfilePage() {
           <div className="space-y-4">
             <section className="rounded-[24px] bg-gradient-to-br from-blue-600 to-blue-800 p-6 text-white">
               <div className="flex items-center justify-between gap-4">
-                <div className="flex items-center gap-4">
-                  <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white/20 text-2xl font-bold">
-                    {displayName.slice(0, 1)}
+                <div className="flex min-w-0 items-center gap-4">
+                  <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-white/20 ring-1 ring-white/20">
+                    <Image
+                      src="/login_icon.png"
+                      alt=""
+                      width={64}
+                      height={64}
+                      className="h-full w-full object-cover"
+                      priority
+                    />
                   </div>
-                  <div>
-                    <h1 className="text-2xl font-bold">{displayName}</h1>
+                  <div className="min-w-0">
+                    <h1 className="truncate text-2xl font-bold">{displayName}</h1>
                     <p className="mt-1 text-sm text-blue-100">{currentUser.login_id}</p>
                     <div className="mt-3 flex flex-wrap gap-1.5">
-                      {targets.map((item) => (
+                      {summaryChips.map((item) => (
                         <span key={item} className="rounded-full bg-white/15 px-2.5 py-1 text-xs font-bold">
                           {item}
                         </span>
@@ -208,7 +275,7 @@ export default function ProfilePage() {
                 <button
                   type="button"
                   onClick={() => setEditOpen((value) => !value)}
-                  className="rounded-xl bg-white/15 px-4 py-2 text-sm font-bold hover:bg-white/25"
+                  className="shrink-0 rounded-xl bg-white/15 px-4 py-2 text-sm font-bold hover:bg-white/25"
                 >
                   {editOpen ? "닫기" : "편집"}
                 </button>
@@ -221,7 +288,7 @@ export default function ProfilePage() {
               </div>
             )}
 
-            {editOpen && (
+            {editOpen ? (
               <InfoPanel title="프로필 편집">
                 <div className="grid gap-3 md:grid-cols-2">
                   <InputField label="이름" value={formName} onChange={setFormName} placeholder="이름을 입력해 주세요" />
@@ -231,7 +298,7 @@ export default function ProfilePage() {
                   <InputField label="나이" value={formAge} onChange={setFormAge} placeholder="예: 25" type="number" />
                   <SelectField label="사용자 유형" value={formUserType} onChange={setFormUserType} options={USER_TYPES} />
                   <SelectField label="지역" value={formRegion} onChange={setFormRegion} options={REGIONS} />
-                  <SelectField label="관심 카테고리" value={formCategory} onChange={setFormCategory} options={CATEGORIES} />
+                  <SelectField label="관심 분야" value={formCategory} onChange={setFormCategory} options={CATEGORIES} />
                 </div>
                 <div className="mt-4 flex justify-end">
                   <button
@@ -244,35 +311,64 @@ export default function ProfilePage() {
                   </button>
                 </div>
               </InfoPanel>
+            ) : (
+              <>
+                <InfoPanel title="기본 정보">
+                  <InfoRow label="이름" value={displayName} />
+                  <InfoRow label="닉네임" value={nickname} />
+                  <InfoRow label="이메일" value={email} />
+                  <InfoRow label="휴대폰 번호" value={phone} />
+                  <InfoRow label="나이" value={age} />
+                  <InfoRow label="지역" value={region} />
+                  <InfoRow label="사용자 유형" value={userType} />
+                  <InfoRow label="관심 분야" value={categoryText(categories)} />
+                </InfoPanel>
+
+                {/* ☑️수정: 알림 기능은 실제 DB/API 확인 전까지 오해를 줄이기 위해 화면에서 보류 */}
+                {SHOW_NOTIFICATION_SETTINGS && (
+                  <InfoPanel title="알림 설정">
+                  {notificationSetupRequired && (
+                    <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-700">
+                      알림 설정 테이블 적용이 필요합니다. 설정 화면은 사용할 수 있지만 DB 저장은 SQL 반영 후 활성화됩니다.
+                    </p>
+                  )}
+                  <ToggleRow
+                    label="마감 임박 알림"
+                    sub="스크랩한 정책의 마감일이 가까워지면 알려드립니다."
+                    active={notifications.deadline_notice}
+                    onToggle={() =>
+                      void saveNotificationSettings({
+                        ...notifications,
+                        deadline_notice: !notifications.deadline_notice,
+                      })
+                    }
+                  />
+                  <ToggleRow
+                    label="추천 업데이트 알림"
+                    sub="내 조건에 맞는 새 정책이 들어오면 알려드립니다."
+                    active={notifications.recommendation_notice}
+                    onToggle={() =>
+                      void saveNotificationSettings({
+                        ...notifications,
+                        recommendation_notice: !notifications.recommendation_notice,
+                      })
+                    }
+                  />
+                  <ToggleRow
+                    label="스크랩 활동 알림"
+                    sub="저장한 정책 상태가 바뀌면 알려드립니다."
+                    active={notifications.scrap_activity_notice}
+                    onToggle={() =>
+                      void saveNotificationSettings({
+                        ...notifications,
+                        scrap_activity_notice: !notifications.scrap_activity_notice,
+                      })
+                    }
+                  />
+                  </InfoPanel>
+                )}
+              </>
             )}
-
-            <InfoPanel title="기본 정보">
-              <InfoRow label="이름" value={displayName} />
-              <InfoRow label="닉네임" value={nickname} />
-              <InfoRow label="이메일" value={email} />
-              <InfoRow label="휴대폰 번호" value={phone} />
-              <InfoRow label="나이" value={age === "미입력" ? age : `${age}세`} />
-            </InfoPanel>
-
-            <InfoPanel title="정책 설정 정보">
-              <InfoRow label="지역" value={region} />
-              <InfoRow label="사용자 유형" value={userType} />
-            </InfoPanel>
-
-            <InfoPanel title="정책 관심 설정">
-              <ChipSet label="내가 관심있는 대상" values={targets} activeValues={targets} />
-              <ChipSet
-                label="관심분야"
-                values={CATEGORIES.filter((value) => value !== ALL_OPTION)}
-                activeValues={categories}
-              />
-            </InfoPanel>
-
-            <InfoPanel title="알림 설정">
-              <ToggleRow label="마감 임박 알림" sub="스크랩한 정책의 마감일이 가까워지면 알려드립니다." active={deadlineNotice} onToggle={() => setDeadlineNotice((value) => !value)} />
-              <ToggleRow label="추천 업데이트 알림" sub="내 조건에 맞는 새 정책이 들어오면 알려드립니다." active={recommendNotice} onToggle={() => setRecommendNotice((value) => !value)} />
-              <ToggleRow label="스크랩 활동 알림" sub="저장한 정책 상태가 바뀌면 알려드립니다." active={applicationNotice} onToggle={() => setApplicationNotice((value) => !value)} />
-            </InfoPanel>
           </div>
         )}
       </main>
@@ -293,7 +389,7 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-4 text-sm">
       <span className="text-slate-500">{label}</span>
-      <span className="font-semibold text-slate-900">{value}</span>
+      <span className="text-right font-semibold text-slate-900">{value}</span>
     </div>
   );
 }
@@ -351,39 +447,6 @@ function SelectField({
         ))}
       </select>
     </label>
-  );
-}
-
-function ChipSet({
-  label,
-  values,
-  activeValues,
-}: {
-  label: string;
-  values: string[];
-  activeValues: readonly string[];
-}) {
-  return (
-    <div>
-      <p className="mb-2 text-sm text-slate-500">{label}</p>
-      <div className="flex flex-wrap gap-2">
-        {values.map((value) => {
-          const active = activeValues.includes(value);
-          return (
-            <span
-              key={value}
-              className={`rounded-full border px-3 py-2 text-sm font-bold ${
-                active
-                  ? "border-blue-600 bg-blue-600 text-white"
-                  : "border-slate-200 text-slate-600"
-              }`}
-            >
-              {value}
-            </span>
-          );
-        })}
-      </div>
-    </div>
   );
 }
 

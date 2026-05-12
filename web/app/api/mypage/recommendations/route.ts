@@ -10,7 +10,6 @@ type UserInfoRow = {
   regions: string[] | null;
   categories: string[] | null;
   age_group: string | null;
-  user_type: string | null;
 };
 
 type ScrapAnnouncementRow = {
@@ -27,6 +26,11 @@ type HybridMatchRow = {
   id: number;
 };
 
+type RecommendationSearchResult = {
+  rows: HybridMatchRow[];
+  warning: string | null;
+};
+
 type RecommendationRow = {
   id: number;
   title: string;
@@ -37,6 +41,72 @@ type RecommendationRow = {
   detail_url: string;
 };
 
+function pickAnnouncementText(source: ScrapAnnouncementRow | ScrapAnnouncementRow[] | null) {
+  if (Array.isArray(source)) return source[0]?.title ?? null;
+  return source?.title ?? null;
+}
+
+async function findRecommendationMatches(
+  queryText: string,
+  rpcBaseParams: {
+    match_threshold: number;
+    match_count: number;
+    filter_category: string | null;
+    filter_region: string | null;
+    user_age: number | null;
+  }
+): Promise<RecommendationSearchResult> {
+  try {
+    const queryEmbedding = await getQueryEmbedding(queryText);
+    const hybridResult = await supabase.rpc("match_announcements_hybrid", {
+      ...rpcBaseParams,
+      query_embedding: queryEmbedding,
+    });
+
+    if (!hybridResult.error) {
+      return {
+        rows: (hybridResult.data ?? []) as HybridMatchRow[],
+        warning: null,
+      };
+    }
+
+    // ☑️수정: hybrid RPC 실패 시 구 RPC로 한 번 더 내려가 홈 추천 카드 500을 방지
+    console.warn(
+      "[/api/mypage/recommendations] hybrid RPC fallback:",
+      hybridResult.error.message
+    );
+    const basicResult = await supabase.rpc("match_announcements", {
+      query_embedding: queryEmbedding,
+      match_threshold: rpcBaseParams.match_threshold,
+      match_count: rpcBaseParams.match_count,
+    });
+
+    if (basicResult.error) {
+      return {
+        rows: [],
+        warning: basicResult.error.message,
+      };
+    }
+
+    return {
+      rows: (basicResult.data ?? []) as HybridMatchRow[],
+      warning: hybridResult.error.message,
+    };
+  } catch (error) {
+    // ☑️수정: Gemini 임베딩 등 추천 생성 실패가 API 전체 500으로 번지지 않게 정상 응답으로 degrade
+    const message =
+      error instanceof Error ? error.message : "recommendation search failed";
+    console.warn(
+      "[/api/mypage/recommendations] recommendation search skipped:",
+      message
+    );
+    return {
+      rows: [],
+      warning: message,
+    };
+  }
+}
+
 export async function GET(request: NextRequest) {
   const loginId = getLoginIdFromRequest(request);
   if (!loginId) {
@@ -44,21 +114,23 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // 1. 내 정보 가져오기
-    const { data: userInfo } = await supabase
+    const { data: userInfo, error: userInfoError } = await supabase
       .from("user_info")
-      .select("regions, categories, age_group, user_type")
+      .select("regions, categories, age_group")
       .eq("login_id", loginId)
       .maybeSingle();
-    const typedUserInfo = userInfo as UserInfoRow | null;
 
-    const region = typedUserInfo?.regions?.[0] || null;
-    const category = typedUserInfo?.categories?.[0] || null;
-    const age = typedUserInfo?.age_group ? parseInt(typedUserInfo.age_group, 10) : null;
-    const userType = typedUserInfo?.user_type || "알 수 없음";
+    if (userInfoError) {
+      return NextResponse.json({ error: userInfoError.message }, { status: 500 });
+    }
 
-    // 2. 스크랩 이력 가져오기 (최대 5건)
-    const { data: scraps } = await supabase
+    const typedUserInfo = (userInfo ?? null) as UserInfoRow | null;
+    const region = typedUserInfo?.regions?.[0] ?? null;
+    const category = typedUserInfo?.categories?.[0] ?? null;
+    const age = typedUserInfo?.age_group ? Number.parseInt(typedUserInfo.age_group, 10) : null;
+    const profileReady = Boolean(region && category && Number.isInteger(age));
+
+    const { data: scraps, error: scrapError } = await supabase
       .from("scraps")
       .select(`
         ann_id,
@@ -68,108 +140,105 @@ export async function GET(request: NextRequest) {
       .order("created_dt", { ascending: false })
       .limit(5);
 
+    if (scrapError) {
+      return NextResponse.json({ error: scrapError.message }, { status: 500 });
+    }
+
     const typedScraps = (scraps ?? []) as ScrapRow[];
-    const scrappedIds = new Set(typedScraps.map((s) => s.ann_id));
+    const scrappedIds = new Set(typedScraps.map((item) => item.ann_id));
     const scrapTitles = typedScraps
-      .map((s) =>
-        Array.isArray(s.announcements)
-          ? s.announcements[0]?.title ?? null
-          : s.announcements?.title ?? null
-      )
+      .map((item) => pickAnnouncementText(item.announcements))
       .filter((title): title is string => Boolean(title))
       .join(", ");
+    const scrapReady = scrapTitles.length > 0;
 
-    // 3. 두 가지 개별 쿼리 텍스트 준비
-    const profileQueryText = `나이: ${age || '미상'}세, 지역: ${region || '무관'}, 분야: ${category || '무관'}, 사용자 유형: ${userType}. 이 사용자에게 적합한 지원 정책을 추천해주세요.`;
-    const hasScraps = scrapTitles.length > 0;
-    const scrapQueryText = hasScraps 
-      ? `다음 정책들과 유사한 공고를 찾아주세요: ${scrapTitles}`
-      : "";
+    if (!profileReady && !scrapReady) {
+      return NextResponse.json({
+        recommendations: [],
+        profile_ready: false,
+        scrap_ready: false,
+      });
+    }
 
-    // 4. 임베딩 및 하이브리드 검색 실행 (병렬)
-    const [profileEmb, scrapEmb] = await Promise.all([
-      getQueryEmbedding(profileQueryText),
-      hasScraps ? getQueryEmbedding(scrapQueryText) : Promise.resolve(null)
-    ]);
-
-    const rpcParams = {
+    const rpcBaseParams = {
       match_threshold: 0.1,
-      match_count: 10,
-      filter_category: category !== "전체" ? category : null,
-      filter_region: region !== "전체" ? region : null,
-      user_age: age,
+      match_count: 50,
+      filter_category: profileReady ? category : null,
+      filter_region: profileReady ? region : null,
+      user_age: profileReady ? age : null,
     };
 
-    const [profileRes, scrapRes] = await Promise.all([
-      supabase.rpc("match_announcements_hybrid", { ...rpcParams, query_embedding: profileEmb }),
-      scrapEmb ? supabase.rpc("match_announcements_hybrid", { ...rpcParams, query_embedding: scrapEmb }) : Promise.resolve({ data: [], error: null })
-    ]);
-
-    if (profileRes.error || scrapRes.error) {
-      console.error("Hybrid search error:", profileRes.error || scrapRes.error);
-      return NextResponse.json({ error: "추천 검색 중 오류가 발생했습니다." }, { status: 500 });
-    }
-
-    // 5. 추천 항목 선별 (이미 스크랩한 건 제외, 중복 제외)
-    const recommendedIds: number[] = [];
+    const recommendationIds: number[] = [];
     const reasonMap = new Map<number, string>();
+    const warnings: string[] = [];
 
-    // 스크랩 기반 1순위 (있을 경우 1건)
-    const scrapRows = (scrapRes.data ?? []) as HybridMatchRow[];
-    for (const row of scrapRows) {
-      if (!scrappedIds.has(row.id)) {
-        recommendedIds.push(row.id);
-        reasonMap.set(row.id, "기존에 스크랩하신 공고들과 유사한 맞춤형 정책입니다.");
-        break; // 1건만
+    if (profileReady) {
+      const profileQueryText = `지역: ${region}, 나이: ${age}세, 관심 분야: ${category}. 이 조건에 잘 맞는 지원 공고를 추천해주세요.`;
+      const profileSearch = await findRecommendationMatches(profileQueryText, rpcBaseParams);
+      if (profileSearch.warning) warnings.push(`profile: ${profileSearch.warning}`);
+
+      for (const row of profileSearch.rows) {
+        if (!scrappedIds.has(row.id) && !recommendationIds.includes(row.id)) {
+          recommendationIds.push(row.id);
+          reasonMap.set(row.id, `${region}, ${category}, ${age}세 조건에 맞춰 고른 공고예요.`);
+          break;
+        }
       }
     }
 
-    // 내 정보 기반 2순위 (스크랩 기반이 있으면 1건, 없으면 2건)
-    const targetProfileCount = hasScraps ? 1 : 2;
-    let addedProfileCount = 0;
-    const profileRows = (profileRes.data ?? []) as HybridMatchRow[];
-    
-    for (const row of profileRows) {
-      if (!scrappedIds.has(row.id) && !recommendedIds.includes(row.id)) {
-        recommendedIds.push(row.id);
-        reasonMap.set(row.id, `입력하신 프로필(${userType}, ${region || '지역무관'})에 적합한 추천 정책입니다.`);
-        addedProfileCount++;
-        if (addedProfileCount >= targetProfileCount) break;
+    if (scrapReady) {
+      const scrapQueryText = `최근 스크랩한 정책과 의미적으로 비슷한 공고를 추천해주세요. ${scrapTitles}`;
+      const scrapSearch = await findRecommendationMatches(scrapQueryText, rpcBaseParams);
+      if (scrapSearch.warning) warnings.push(`scrap: ${scrapSearch.warning}`);
+
+      for (const row of scrapSearch.rows) {
+        if (!scrappedIds.has(row.id) && !recommendationIds.includes(row.id)) {
+          recommendationIds.push(row.id);
+          reasonMap.set(row.id, "최근 스크랩한 정책과 비슷한 흐름의 공고예요.");
+          break;
+        }
       }
     }
 
-    if (recommendedIds.length === 0) {
-      return NextResponse.json({ recommendations: [] });
+    if (recommendationIds.length === 0) {
+      return NextResponse.json({
+        recommendations: [],
+        profile_ready: profileReady,
+        scrap_ready: scrapReady,
+        recommendation_warnings: warnings,
+      });
     }
 
-    // 6. 추천 공고 상세 정보 조회
-    const { data: recommendations, error: recError } = await supabase
+    const { data: recommendations, error: recommendationError } = await supabase
       .from("announcements")
       .select("id, title, summary, s_category, region, apply_end_dt, detail_url")
-      .in("id", recommendedIds);
+      .in("id", recommendationIds);
 
-    if (recError) {
-      console.error("Fetch recommendations error:", recError);
-      return NextResponse.json({ error: "공고 상세 정보 조회 실패" }, { status: 500 });
+    if (recommendationError) {
+      return NextResponse.json({ error: recommendationError.message }, { status: 500 });
     }
 
-    // 모집 여부 등 추가 정보 가공 및 순서 유지(recommendedIds 순서대로)
     const typedRecommendations = (recommendations ?? []) as RecommendationRow[];
-    const formattedRecs = recommendedIds
-      .map((id) => typedRecommendations.find((rec) => rec.id === id))
-      .filter((rec): rec is RecommendationRow => Boolean(rec))
-      .map((rec) => {
-        return {
-          ...rec,
-          status: recruitmentStatus(null, rec.apply_end_dt),
-          reason: reasonMap.get(rec.id) || "추천 공고입니다.",
-        };
-      });
+    const formatted = recommendationIds
+      .map((id) => typedRecommendations.find((item) => item.id === id))
+      .filter((item): item is RecommendationRow => Boolean(item))
+      .map((item) => ({
+        ...item,
+        status: recruitmentStatus(null, item.apply_end_dt),
+        reason: reasonMap.get(item.id) ?? "맞춤 추천 공고예요.",
+      }));
 
-    return NextResponse.json({ recommendations: formattedRecs });
-
+    return NextResponse.json({
+      recommendations: formatted,
+      profile_ready: profileReady,
+      scrap_ready: scrapReady,
+      recommendation_warnings: warnings,
+    });
   } catch (error) {
     console.error("Recommendations API error:", error);
-    return NextResponse.json({ error: "서버 내부 오류가 발생했습니다." }, { status: 500 });
+    return NextResponse.json(
+      { error: "추천 정보를 불러오는 중 오류가 발생했습니다." },
+      { status: 500 }
+    );
   }
 }

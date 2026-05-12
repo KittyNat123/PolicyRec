@@ -39,8 +39,12 @@ function normalizeName(value: unknown): string {
 }
 
 function missingColumnFromError(error: { message?: string }) {
-  const match = error.message?.match(/'([^']+)' column of 'user_info'/);
-  return match?.[1] ?? null;
+  const message = error.message ?? "";
+  return (
+    message.match(/'([^']+)' column of 'user_info'/)?.[1] ??
+    message.match(/Could not find the '([^']+)' column/i)?.[1] ??
+    null
+  );
 }
 
 export async function POST(request: NextRequest) {
@@ -120,10 +124,8 @@ export async function POST(request: NextRequest) {
       name,
       nickname,
       age_group: targetAge !== null ? String(targetAge) : null,
-      region,
       regions: region ? [region] : [],
       categories: category ? [category] : [],
-      interest_keywords: [],
       user_type: userType || null,
       phone,
     };

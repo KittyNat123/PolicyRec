@@ -39,6 +39,7 @@ export type SavedFilter = {
 
 export type SavedChat = {
   id: number;
+  session_id?: string | null;
   title?: string | null;
   content: string;
   ann_ids: number[];
