@@ -17,10 +17,11 @@ CREATE TABLE user_info (
   name TEXT,                               -- 사용자 실명
   nickname VARCHAR,
   user_type VARCHAR,                      -- 사용자 유형 (청년, 예비 창업자 등)
-  age_group VARCHAR,                      -- 정확한 나이 문자열 저장 (예: 25)
-  phone TEXT,                             -- 연락처 (가독성 및 유연성을 위해 TEXT 사용)
+  age_group TEXT,                         -- 정확한 나이 문자열 저장 (예: 25)
+  phone VARCHAR,                          -- 계정 복구 및 연락용 휴대폰 번호
   regions TEXT[],                         -- 가입/프로필 기준 기본 지역
   categories TEXT[],                      -- 가입/프로필 기준 기본 관심 카테고리
+  interest_keywords TEXT[],               -- 자유 관심 키워드
   created_dt TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_dt TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
