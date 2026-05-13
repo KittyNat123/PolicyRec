@@ -1,315 +1,475 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { AppHeader } from "@/components/AppHeader";
 
-type Stats = {
-  total: number;
-  open: number;
-  standing: number;
-  embeddingRatio: number;
-  embeddingCount: number;
-  topCategories: { category: string; count: number }[];
+type AnnouncementStatus = "모집중" | "마감" | "마감임박" | "상시/미정";
+
+type DistributionItem = {
+  label: string;
+  count: number;
 };
 
-type AdminTab = "dashboard" | "policies" | "users";
+type AnnouncementItem = {
+  id: number;
+  title: string;
+  provider: string;
+  region: string;
+  category: string;
+  source: string;
+  detailUrl: string | null;
+  applyEndDt: string | null;
+  createdDt: string | null;
+  updatedDt: string | null;
+  status: AnnouncementStatus;
+};
 
-const MOCK_POLICIES = [
-  ["청년 월세 한시 특별지원", "국토교통부", "주거", "마감임박", "2026-06-30"],
-  ["청년 창업 도약 패키지", "중소벤처기업부", "창업", "진행중", "2026-07-15"],
-  ["국민취업지원제도 유형", "고용노동부", "취업", "진행중", "2026-12-31"],
-  ["서울시 청년 교통비 지원", "서울특별시", "복지", "진행중", "2026-08-31"],
-  ["청년 내일저축계좌", "보건복지부", "금융", "마감임박", "2026-05-31"],
-  ["문화누리카드", "문화체육관광부", "문화", "진행중", "2026-11-30"],
-];
+type RecentUser = {
+  displayName: string;
+  ageGroup: string;
+  regions: string[];
+  categories: string[];
+  userType: string;
+  role: "admin" | "user";
+  createdDt: string | null;
+};
 
-const USER_BUCKETS = [
-  { label: "19-24", value: 2800 },
-  { label: "25-29", value: 3900 },
-  { label: "30-34", value: 2400 },
-  { label: "35-39", value: 1600 },
-  { label: "40-49", value: 950 },
-  { label: "50+", value: 480 },
+type BatchLog = {
+  logId: number;
+  source: string;
+  status: string;
+  totalCount: number;
+  insertedCount: number;
+  errorMessage: string;
+  executionTimeMs: number;
+  createdDt: string | null;
+};
+
+type AdminStats = {
+  generatedAt: string;
+  today: string;
+  announcements: {
+    total: number;
+    open: number;
+    closed: number;
+    standing: number;
+    urgent: number;
+    embeddingCount: number;
+    embeddingRatio: number;
+    byCategory: DistributionItem[];
+    byRegion: DistributionItem[];
+    bySource: DistributionItem[];
+    recent: AnnouncementItem[];
+    rows: AnnouncementItem[];
+  };
+  users: {
+    total: number;
+    recent: RecentUser[];
+    byAgeGroup: DistributionItem[];
+    byRegion: DistributionItem[];
+    byInterest: DistributionItem[];
+    byUserType: DistributionItem[];
+  };
+  scraps: {
+    total: number;
+  };
+  batchLogs: {
+    latestStatus: string;
+    latestTotalCount: number;
+    latestInsertedCount: number;
+    latestExecutionTimeMs: number;
+    failureCount: number;
+    recent: BatchLog[];
+  };
+};
+
+type AdminTab = "dashboard" | "announcements" | "users";
+
+const ALL_OPTION = "전체";
+
+// ☑️수정: 오늘 데모 범위에 맞춰 mock 지표 없이 read-only 관리자 탭만 유지
+const TABS: Array<{ key: AdminTab; label: string }> = [
+  { key: "dashboard", label: "대시보드" },
+  { key: "announcements", label: "공고 데이터 조회" },
+  { key: "users", label: "사용자 현황" },
 ];
 
 export default function AdminPage() {
   const router = useRouter();
-  const [stats, setStats] = useState<Stats | null>(null);
+  const [stats, setStats] = useState<AdminStats | null>(null);
   const [activeTab, setActiveTab] = useState<AdminTab>("dashboard");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let alive = true;
+
     void (async () => {
       const res = await fetch("/api/admin/stats", { cache: "no-store" });
       if (res.status === 401) {
         router.replace("/");
         return;
       }
+
+      const data = await res.json().catch(() => ({}));
+      if (!alive) return;
+
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setError(data.error ?? "관리자 통계를 불러오지 못했어요.");
+        setError(data.error ?? "관리자 통계를 불러오지 못했습니다.");
         setLoading(false);
         return;
       }
-      const data = await res.json();
-      setStats(data);
+
+      setStats(data as AdminStats);
       setLoading(false);
     })();
-  }, [router]);
 
-  const urgentCount = useMemo(() => {
-    if (!stats) return 0;
-    return Math.min(3, Math.max(stats.total - stats.open - stats.standing, 0) || 3);
-  }, [stats]);
+    return () => {
+      alive = false;
+    };
+  }, [router]);
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-50">
-        <AppHeader currentUser={{ login_id: "admin", role: "admin" }} />
-        <div className="mx-auto max-w-[1280px] px-6 py-10 text-sm text-slate-500">
-          관리자 대시보드를 불러오고 있어요.
+      <AdminShell>
+        <div className="px-6 py-10 text-sm text-slate-500">
+          실제 DB 기준 관리자 데이터를 불러오는 중입니다.
         </div>
-      </div>
+      </AdminShell>
     );
   }
 
   if (error || !stats) {
     return (
-      <div className="min-h-screen bg-slate-50">
-        <AppHeader currentUser={{ login_id: "admin", role: "admin" }} />
-        <div className="mx-auto max-w-[1280px] px-6 py-10">
+      <AdminShell>
+        <div className="px-6 py-10">
           <div className="rounded-lg border border-red-200 bg-red-50 p-5 text-sm text-red-700">
-            {error ?? "표시할 관리자 데이터가 없습니다."}
+            {error ?? "관리자 데이터를 확인할 수 없습니다."}
           </div>
         </div>
-      </div>
+      </AdminShell>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-950">
-      <AppHeader currentUser={{ login_id: "admin", role: "admin" }} />
+    <AdminShell>
       <main className="mx-auto max-w-[1280px] px-4 py-7 sm:px-6">
         <div className="mb-7 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h1 className="text-2xl font-bold">관리자 대시보드</h1>
-            <p className="mt-2 text-sm text-slate-500">PolicyRec 정책 데이터 관리</p>
+            <h1 className="text-2xl font-bold text-slate-950">관리자 대시보드</h1>
+            <p className="mt-2 text-sm text-slate-500">
+              실제 DB의 공고, 사용자 조건, 스크랩, 수집 로그를 조회 전용으로 확인합니다.
+            </p>
           </div>
-          <button className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-blue-700">
-            + 정책 추가
-          </button>
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-bold text-emerald-700">
+            read-only · DB select 조회
+          </div>
         </div>
 
         <div className="mb-6 inline-flex rounded-lg bg-slate-100 p-1">
-          {[
-            ["dashboard", "대시보드"],
-            ["policies", "정책 관리"],
-            ["users", "사용자 현황"],
-          ].map(([key, label]) => (
+          {TABS.map((tab) => (
             <button
-              key={key}
+              key={tab.key}
               type="button"
-              onClick={() => setActiveTab(key as AdminTab)}
+              onClick={() => setActiveTab(tab.key)}
               className={`rounded-md px-4 py-2 text-sm font-bold ${
-                activeTab === key
+                activeTab === tab.key
                   ? "bg-white text-blue-700 shadow-sm"
                   : "text-slate-500 hover:text-slate-900"
               }`}
             >
-              {label}
+              {tab.label}
             </button>
           ))}
         </div>
 
-        {activeTab === "dashboard" && (
-          <DashboardTab stats={stats} urgentCount={urgentCount} />
-        )}
-        {activeTab === "policies" && <PoliciesTab />}
-        {activeTab === "users" && <UsersTab />}
+        {activeTab === "dashboard" && <DashboardTab stats={stats} />}
+        {activeTab === "announcements" && <AnnouncementsTab stats={stats} />}
+        {activeTab === "users" && <UsersTab stats={stats} />}
       </main>
+    </AdminShell>
+  );
+}
+
+function AdminShell({ children }: { children: ReactNode }) {
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-950">
+      <AppHeader currentUser={{ login_id: "admin", role: "admin" }} />
+      {children}
     </div>
   );
 }
 
-function DashboardTab({
-  stats,
-  urgentCount,
-}: {
-  stats: Stats;
-  urgentCount: number;
-}) {
-  const maxCategory = Math.max(...stats.topCategories.map((item) => item.count), 1);
-  const closedCount = Math.max(stats.total - stats.open - stats.standing, 0);
+function DashboardTab({ stats }: { stats: AdminStats }) {
+  const openWithoutUrgent = Math.max(stats.announcements.open - stats.announcements.urgent, 0);
+  const statusItems = [
+    { label: "모집중", count: openWithoutUrgent, color: "bg-emerald-500" },
+    { label: "마감임박", count: stats.announcements.urgent, color: "bg-amber-500" },
+    { label: "마감", count: stats.announcements.closed, color: "bg-slate-400" },
+    { label: "상시/미정", count: stats.announcements.standing, color: "bg-blue-500" },
+  ];
 
   return (
     <div className="space-y-6">
-      <Panel title="DB 연결 상태">
-        <div className="grid gap-3 text-sm md:grid-cols-2">
-          <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-emerald-800">
-            실제 DB 연결: 전체 정책 수, 모집 상태, 분야별 정책 현황, 마감 임박 수
-          </div>
-          <div className="rounded-lg border border-amber-100 bg-amber-50 p-3 text-amber-800">
-            임시 표시: 조회수, 신청 건수, 주간 활동, 최근 로그, 정책/사용자 관리 테이블
-          </div>
-        </div>
-      </Panel>
       <div className="grid gap-4 md:grid-cols-4">
-        <AdminMetric label="전체 정책" value={stats.total.toLocaleString()} sub="이번 주 3개 추가" tone="blue" />
-        <AdminMetric label="총 조회수" value="28,541" sub="임시 지표" tone="violet" />
-        <AdminMetric label="신청 건수" value="1,284" sub="임시 지표" tone="green" />
-        <AdminMetric label="마감 임박" value={urgentCount.toLocaleString()} sub="7일 이내" tone="amber" />
+        <AdminMetric label="전체 공고 수" value={formatCount(stats.announcements.total)} sub="announcements" tone="blue" />
+        <AdminMetric label="모집중 공고 수" value={formatCount(stats.announcements.open)} sub="마감임박 포함" tone="green" />
+        <AdminMetric label="마감 공고 수" value={formatCount(stats.announcements.closed)} sub="apply_end_dt 기준" tone="slate" />
+        <AdminMetric label="마감임박 공고 수" value={formatCount(stats.announcements.urgent)} sub="오늘부터 7일 이내" tone="amber" />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
-        <Panel title="주간 활동 현황">
-          <div className="flex h-48 items-end gap-4 px-3 pt-6">
-            {[1200, 1450, 980, 1700, 2150, 780, 620].map((value, index) => (
-              <div key={index} className="flex flex-1 flex-col items-center gap-2">
-                <div className="flex h-36 w-full items-end justify-center gap-1">
-                  <span className="w-8 rounded-t bg-blue-100" style={{ height: `${(value / 2200) * 100}%` }} />
-                  <span className="w-8 rounded-t bg-blue-600" style={{ height: `${Math.max(8, (value / 9000) * 100)}%` }} />
-                </div>
-                <span className="text-xs text-slate-500">{["월", "화", "수", "목", "금", "토", "일"][index]}</span>
-              </div>
-            ))}
-          </div>
+      <div className="grid gap-4 md:grid-cols-4">
+        <AdminMetric
+          label="임베딩 생성 공고"
+          value={formatCount(stats.announcements.embeddingCount)}
+          sub={`${stats.announcements.embeddingRatio}%`}
+          tone="violet"
+        />
+        <AdminMetric label="전체 가입자 수" value={formatCount(stats.users.total)} sub="users" tone="blue" />
+        <AdminMetric label="전체 스크랩 수" value={formatCount(stats.scraps.total)} sub="scraps" tone="green" />
+        <AdminMetric label="실패 로그 수" value={formatCount(stats.batchLogs.failureCount)} sub="api_batch_logs" tone="red" />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+        <Panel title="공고 상태 현황">
+          <StatusRatioBar items={statusItems} total={stats.announcements.total} />
         </Panel>
-        <Panel title="정책 상태">
-          <div className="flex flex-col items-center gap-5 py-4">
-            <div
-              className="h-32 w-32 rounded-full"
-              style={{
-                background: `conic-gradient(#22c55e 0 68%, #f59e0b 68% 86%, #94a3b8 86% 100%)`,
-              }}
-            />
-            <div className="grid w-full grid-cols-2 gap-3 text-sm">
-              <Legend label="진행중" value={stats.open} color="bg-emerald-500" />
-              <Legend label="마감임박" value={urgentCount} color="bg-amber-500" />
-              <Legend label="마감" value={closedCount} color="bg-slate-400" />
-              <Legend label="예정" value={0} color="bg-blue-500" />
-            </div>
+        <Panel title="최근 수집 상태">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <MiniStat label="상태" value={stats.batchLogs.latestStatus} />
+            <MiniStat label="수집 건수" value={formatCount(stats.batchLogs.latestTotalCount)} />
+            <MiniStat label="삽입 건수" value={formatCount(stats.batchLogs.latestInsertedCount)} />
+            <MiniStat label="소요 시간" value={formatDuration(stats.batchLogs.latestExecutionTimeMs)} />
           </div>
         </Panel>
       </div>
 
-      <Panel title="분야별 정책 현황">
-        <div className="space-y-4 py-3">
-          {stats.topCategories.map((item) => (
-            <div key={item.category} className="grid grid-cols-[70px_1fr_48px] items-center gap-3">
-              <span className="text-sm text-slate-600">{item.category}</span>
-              <div className="h-2 rounded-full bg-blue-50">
-                <div
-                  className="h-2 rounded-full bg-blue-600"
-                  style={{ width: `${Math.max(4, (item.count / maxCategory) * 100)}%` }}
-                />
-              </div>
-              <span className="text-right text-sm font-bold text-slate-700">{item.count}</span>
-            </div>
-          ))}
-        </div>
-      </Panel>
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Panel title="분야별 공고 현황">
+          <HorizontalBars items={stats.announcements.byCategory} />
+        </Panel>
+        <Panel title="지역별 공고 현황">
+          <HorizontalBars items={stats.announcements.byRegion} />
+        </Panel>
+        <Panel title="source/provider별 공고 현황">
+          <HorizontalBars items={stats.announcements.bySource} />
+        </Panel>
+      </div>
 
-      <Panel title="최근 활동 로그">
-        {[
-          "청년 마음건강 지원사업 정책 추가됨",
-          "청년 월세 한시 특별지원 마감일 수정됨",
-          "국민취업지원제도 유형 신청 150건 처리 완료",
-          "경기도 청년 기본소득 마감 임박",
-        ].map((item, index) => (
-          <div key={item} className="flex items-center justify-between border-b border-slate-100 py-4 last:border-0">
-            <span className="text-sm text-slate-700">{item}</span>
-            <span className="text-xs text-slate-400">{["10분 전", "1시간 전", "3시간 전", "5시간 전"][index]}</span>
-          </div>
-        ))}
-      </Panel>
+      <div className="grid gap-4 lg:grid-cols-[1fr_1.2fr]">
+        <Panel title="사용자 나이대 분포">
+          <VerticalBars items={stats.users.byAgeGroup} />
+        </Panel>
+        <Panel title="관심분야 분포">
+          <HorizontalBars items={stats.users.byInterest} />
+        </Panel>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Panel title="최근 등록/업데이트 공고 10개">
+          <AnnouncementCompactList items={stats.announcements.recent} />
+        </Panel>
+        <Panel title="최근 수집 로그">
+          <BatchLogTable logs={stats.batchLogs.recent.slice(0, 5)} compact />
+        </Panel>
+      </div>
     </div>
   );
 }
 
-function PoliciesTab() {
+function AnnouncementsTab({ stats }: { stats: AdminStats }) {
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState<string>(ALL_OPTION);
+  const [category, setCategory] = useState<string>(ALL_OPTION);
+  const [region, setRegion] = useState<string>(ALL_OPTION);
+  const [source, setSource] = useState<string>(ALL_OPTION);
+
+  // ☑️수정: 정책 관리 기능을 제거하고 클라이언트 필터 기반 공고 조회만 제공
+  const options = useMemo(() => {
+    return {
+      categories: uniqueOptions(stats.announcements.rows.map((item) => item.category)),
+      regions: uniqueOptions(stats.announcements.rows.map((item) => item.region)),
+      sources: uniqueOptions(stats.announcements.rows.map((item) => item.source)),
+    };
+  }, [stats.announcements.rows]);
+
+  const filtered = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+
+    return stats.announcements.rows.filter((item) => {
+      const matchesQuery =
+        !normalizedQuery ||
+        item.title.toLowerCase().includes(normalizedQuery) ||
+        item.provider.toLowerCase().includes(normalizedQuery);
+      const matchesStatus = status === ALL_OPTION || item.status === status;
+      const matchesCategory = category === ALL_OPTION || item.category === category;
+      const matchesRegion = region === ALL_OPTION || item.region === region;
+      const matchesSource = source === ALL_OPTION || item.source === source;
+
+      return matchesQuery && matchesStatus && matchesCategory && matchesRegion && matchesSource;
+    });
+  }, [category, query, region, source, stats.announcements.rows, status]);
+
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 sm:flex-row">
-        <input
-          placeholder="정책명 또는 기관 검색"
-          className="min-w-0 flex-1 rounded-lg border border-slate-200 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-        />
-        <select className="rounded-lg border border-slate-200 px-3 py-2.5 text-sm">
-          <option>전체 상태</option>
-        </select>
-        <select className="rounded-lg border border-slate-200 px-3 py-2.5 text-sm">
-          <option>전체 분야</option>
-        </select>
+      <div className="rounded-lg border border-slate-200 bg-white p-4">
+        <div className="grid gap-3 lg:grid-cols-[1.5fr_repeat(4,minmax(0,1fr))]">
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="제목 또는 기관 검색"
+            className="min-w-0 rounded-lg border border-slate-200 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <FilterSelect value={status} onChange={setStatus} options={[ALL_OPTION, "모집중", "마감임박", "마감", "상시/미정"]} />
+          <FilterSelect value={category} onChange={setCategory} options={[ALL_OPTION, ...options.categories]} />
+          <FilterSelect value={region} onChange={setRegion} options={[ALL_OPTION, ...options.regions]} />
+          <FilterSelect value={source} onChange={setSource} options={[ALL_OPTION, ...options.sources]} />
+        </div>
+        <p className="mt-3 text-xs text-slate-500">
+          {formatCount(filtered.length)}개 표시 / 전체 {formatCount(stats.announcements.rows.length)}개
+        </p>
       </div>
+
       <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-        <table className="w-full min-w-[760px] text-left text-sm">
-          <thead className="bg-slate-50 text-xs font-bold text-slate-500">
-            <tr>
-              {["정책명", "기관", "분야", "상태", "마감일", "관리"].map((head) => (
-                <th key={head} className="px-4 py-3">{head}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {MOCK_POLICIES.map((row) => (
-              <tr key={row[0]} className="border-t border-slate-100">
-                {row.map((cell, index) => (
-                  <td key={`${row[0]}-${index}`} className="px-4 py-4">
-                    {index === 2 ? (
-                      <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-700">{cell}</span>
-                    ) : index === 3 ? (
-                      <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${cell === "마감임박" ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}>{cell}</span>
-                    ) : cell}
-                  </td>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[980px] text-left text-sm">
+            <thead className="bg-slate-50 text-xs font-bold text-slate-500">
+              <tr>
+                {["제목", "기관", "지역", "분야", "상태", "마감일", "source", "상세 보기"].map((head) => (
+                  <th key={head} className="px-4 py-3">
+                    {head}
+                  </th>
                 ))}
-                <td className="px-4 py-4 text-slate-400">수정 · 삭제</td>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {filtered.slice(0, 100).map((item) => (
+                <tr key={item.id} className="border-t border-slate-100 align-top">
+                  <td className="max-w-[340px] px-4 py-4 font-semibold text-slate-800">{item.title}</td>
+                  <td className="px-4 py-4 text-slate-600">{item.provider}</td>
+                  <td className="px-4 py-4 text-slate-600">{item.region}</td>
+                  <td className="px-4 py-4 text-slate-600">{item.category}</td>
+                  <td className="px-4 py-4">
+                    <StatusBadge status={item.status} />
+                  </td>
+                  <td className="px-4 py-4 text-slate-600">{item.applyEndDt ?? "상시/미정"}</td>
+                  <td className="px-4 py-4 text-slate-600">{item.source}</td>
+                  <td className="px-4 py-4">
+                    {item.detailUrl ? (
+                      <a
+                        href={item.detailUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-bold text-blue-700 hover:text-blue-800"
+                      >
+                        열기
+                      </a>
+                    ) : (
+                      <span className="text-slate-400">-</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {filtered.length === 0 && <EmptyState label="조건에 맞는 공고가 없습니다." />}
+        {filtered.length > 100 && (
+          <div className="border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
+            화면 성능을 위해 상위 100개만 표시합니다. 검색어나 필터를 좁혀 확인하세요.
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-function UsersTab() {
-  const max = Math.max(...USER_BUCKETS.map((item) => item.value));
+function UsersTab({ stats }: { stats: AdminStats }) {
   return (
     <div className="space-y-5">
       <div className="grid gap-4 md:grid-cols-4">
-        <AdminMetric label="전체 가입자" value="12,847" sub="234 이번 달" tone="blue" />
-        <AdminMetric label="활성 사용자 (MAU)" value="5,621" sub="8.2%" tone="green" />
-        <AdminMetric label="평균 세션 시간" value="4분 32초" sub="임시 지표" tone="violet" />
-        <AdminMetric label="정책 신청 전환율" value="18.4%" sub="2.1%p" tone="amber" />
+        <AdminMetric label="전체 가입자 수" value={formatCount(stats.users.total)} sub="users" tone="blue" />
+        <AdminMetric label="최근 신규 가입자" value={formatCount(stats.users.recent.length)} sub="최근 5명" tone="green" />
+        <AdminMetric label="나이대 항목" value={formatCount(stats.users.byAgeGroup.length)} sub="user_info.age_group" tone="violet" />
+        <AdminMetric label="사용자 유형 항목" value={formatCount(stats.users.byUserType.length)} sub="user_info.user_type" tone="amber" />
       </div>
-      <Panel title="연령대별 사용자 분포">
-        <div className="flex h-52 items-end gap-5 px-6 pt-8">
-          {USER_BUCKETS.map((item) => (
-            <div key={item.label} className="flex flex-1 flex-col items-center gap-2">
-              <div className="w-full rounded-t bg-blue-600" style={{ height: `${Math.max(12, (item.value / max) * 150)}px` }} />
-              <span className="text-xs text-slate-500">{item.label}</span>
-            </div>
-          ))}
-        </div>
-      </Panel>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Panel title="나이대별 사용자 분포">
+          <VerticalBars items={stats.users.byAgeGroup} />
+        </Panel>
+        <Panel title="사용자 유형별 분포">
+          <HorizontalBars items={stats.users.byUserType} />
+        </Panel>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Panel title="지역별 사용자 분포">
+          <HorizontalBars items={stats.users.byRegion} />
+        </Panel>
+        <Panel title="관심분야별 사용자 분포">
+          <HorizontalBars items={stats.users.byInterest} />
+        </Panel>
+      </div>
+
       <Panel title="최근 신규 가입자">
-        {[
-          ["박민준 · 26세", "서울 · 관심: 취업", "오늘"],
-          ["이소연 · 29세", "경기 · 관심: 주거", "어제"],
-          ["정재원 · 24세", "부산 · 관심: 창업", "2일 전"],
-        ].map(([name, meta, date]) => (
-          <div key={name} className="flex items-center justify-between border-b border-slate-100 py-4 last:border-0">
-            <div>
-              <p className="font-bold text-slate-800">{name}</p>
-              <p className="mt-1 text-xs text-slate-500">{meta}</p>
-            </div>
-            <span className="text-xs text-slate-400">{date}</span>
-          </div>
-        ))}
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px] text-left text-sm">
+            <thead className="bg-slate-50 text-xs font-bold text-slate-500">
+              <tr>
+                {["닉네임", "나이대", "지역", "관심분야", "사용자 유형", "가입일"].map((head) => (
+                  <th key={head} className="px-4 py-3">
+                    {head}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {stats.users.recent.map((user, index) => (
+                <tr key={`${user.displayName}-${index}`} className="border-t border-slate-100">
+                  <td className="px-4 py-4 font-semibold text-slate-800">{user.displayName}</td>
+                  <td className="px-4 py-4 text-slate-600">{user.ageGroup}</td>
+                  <td className="px-4 py-4 text-slate-600">{joinLabels(user.regions)}</td>
+                  <td className="px-4 py-4 text-slate-600">{joinLabels(user.categories)}</td>
+                  <td className="px-4 py-4 text-slate-600">{user.userType}</td>
+                  <td className="px-4 py-4 text-slate-600">{formatDate(user.createdDt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {stats.users.recent.length === 0 && <EmptyState label="최근 가입자 데이터가 없습니다." />}
+      </Panel>
+
+      <Panel title="최근 수집 로그">
+        <BatchLogTable logs={stats.batchLogs.recent} />
       </Panel>
     </div>
+  );
+}
+
+function FilterSelect({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  options: string[];
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      className="min-w-0 rounded-lg border border-slate-200 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+    >
+      {options.map((option) => (
+        <option key={option} value={option}>
+          {option}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -322,25 +482,36 @@ function AdminMetric({
   label: string;
   value: string;
   sub: string;
-  tone: "blue" | "green" | "violet" | "amber";
+  tone: "blue" | "green" | "violet" | "amber" | "red" | "slate";
 }) {
   const toneClass = {
     blue: "text-blue-600",
     green: "text-emerald-600",
     violet: "text-violet-600",
     amber: "text-amber-600",
+    red: "text-red-600",
+    slate: "text-slate-700",
   }[tone];
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-5">
       <p className="text-sm font-medium text-slate-500">{label}</p>
       <p className={`mt-3 text-3xl font-bold ${toneClass}`}>{value}</p>
-      <p className="mt-2 text-xs font-semibold text-emerald-600">{sub}</p>
+      <p className="mt-2 text-xs font-semibold text-slate-500">{sub}</p>
     </div>
   );
 }
 
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+      <p className="text-xs font-bold text-slate-500">{label}</p>
+      <p className="mt-2 break-words text-lg font-bold text-slate-900">{value}</p>
+    </div>
+  );
+}
+
+function Panel({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5">
       <h2 className="text-lg font-bold text-slate-950">{title}</h2>
@@ -349,22 +520,208 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
   );
 }
 
-function Legend({
-  label,
-  value,
-  color,
-}: {
-  label: string;
-  value: number;
-  color: string;
-}) {
+// ☑️수정: 새 차트 라이브러리 없이 CSS div 기반 막대 그래프로 분포를 표현
+function HorizontalBars({ items }: { items: DistributionItem[] }) {
+  const max = Math.max(...items.map((item) => item.count), 1);
+  if (items.length === 0) return <EmptyState label="표시할 데이터가 없습니다." />;
+
   return (
-    <div className="flex items-center justify-between gap-2">
-      <span className="inline-flex items-center gap-2 text-slate-600">
-        <span className={`h-2.5 w-2.5 rounded-full ${color}`} />
-        {label}
-      </span>
-      <span className="font-bold">{value}</span>
+    <div className="space-y-3">
+      {items.map((item) => (
+        <div key={item.label} className="grid grid-cols-[96px_1fr_52px] items-center gap-3">
+          <span className="truncate text-sm text-slate-600" title={item.label}>
+            {item.label}
+          </span>
+          <div className="h-2 rounded-full bg-slate-100">
+            <div
+              className="h-2 rounded-full bg-blue-600"
+              style={{ width: `${Math.max(4, (item.count / max) * 100)}%` }}
+            />
+          </div>
+          <span className="text-right text-sm font-bold text-slate-700">{formatCount(item.count)}</span>
+        </div>
+      ))}
     </div>
   );
+}
+
+function VerticalBars({ items }: { items: DistributionItem[] }) {
+  const max = Math.max(...items.map((item) => item.count), 1);
+  if (items.length === 0) return <EmptyState label="표시할 데이터가 없습니다." />;
+
+  return (
+    <div className="flex h-56 items-end gap-3 px-2 pt-6">
+      {items.slice(0, 8).map((item) => (
+        <div key={item.label} className="flex min-w-0 flex-1 flex-col items-center gap-2">
+          <span className="text-xs font-bold text-slate-700">{formatCount(item.count)}</span>
+          <div className="flex h-36 w-full items-end justify-center">
+            <div
+              className="w-full max-w-[42px] rounded-t bg-blue-600"
+              style={{ height: `${Math.max(10, (item.count / max) * 144)}px` }}
+            />
+          </div>
+          <span className="w-full truncate text-center text-xs text-slate-500" title={item.label}>
+            {item.label}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function StatusRatioBar({
+  items,
+  total,
+}: {
+  items: Array<{ label: string; count: number; color: string }>;
+  total: number;
+}) {
+  const denominator = Math.max(total, 1);
+
+  return (
+    <div className="space-y-5">
+      <div className="flex h-4 overflow-hidden rounded-full bg-slate-100">
+        {items.map((item) => (
+          <div
+            key={item.label}
+            className={item.color}
+            style={{ width: `${(item.count / denominator) * 100}%` }}
+            title={`${item.label} ${item.count}개`}
+          />
+        ))}
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {items.map((item) => (
+          <div key={item.label} className="flex items-center justify-between gap-3 text-sm">
+            <span className="inline-flex min-w-0 items-center gap-2 text-slate-600">
+              <span className={`h-2.5 w-2.5 rounded-full ${item.color}`} />
+              {item.label}
+            </span>
+            <span className="font-bold text-slate-900">{formatCount(item.count)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AnnouncementCompactList({ items }: { items: AnnouncementItem[] }) {
+  if (items.length === 0) return <EmptyState label="최근 공고 데이터가 없습니다." />;
+
+  return (
+    <div className="divide-y divide-slate-100">
+      {items.map((item) => (
+        <div key={item.id} className="flex items-start justify-between gap-4 py-3">
+          <div className="min-w-0">
+            <p className="truncate font-bold text-slate-800" title={item.title}>
+              {item.title}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              {item.provider} · {item.region} · {item.category}
+            </p>
+          </div>
+          <div className="shrink-0 text-right">
+            <StatusBadge status={item.status} />
+            <p className="mt-1 text-xs text-slate-400">{formatDate(item.updatedDt ?? item.createdDt)}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BatchLogTable({ logs, compact = false }: { logs: BatchLog[]; compact?: boolean }) {
+  if (logs.length === 0) return <EmptyState label="수집 로그가 없습니다." />;
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[720px] text-left text-sm">
+        <thead className="bg-slate-50 text-xs font-bold text-slate-500">
+          <tr>
+            {["source", "status", "수집", "삽입", "소요 시간", "오류", "일시"].map((head) => (
+              <th key={head} className="px-3 py-3">
+                {head}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {logs.map((log) => (
+            <tr key={log.logId} className="border-t border-slate-100 align-top">
+              <td className="px-3 py-3 font-semibold text-slate-800">{log.source}</td>
+              <td className="px-3 py-3 text-slate-600">{log.status}</td>
+              <td className="px-3 py-3 text-slate-600">{formatCount(log.totalCount)}</td>
+              <td className="px-3 py-3 text-slate-600">{formatCount(log.insertedCount)}</td>
+              <td className="px-3 py-3 text-slate-600">{formatDuration(log.executionTimeMs)}</td>
+              <td className={`${compact ? "max-w-[180px]" : "max-w-[260px]"} truncate px-3 py-3 text-slate-600`} title={log.errorMessage}>
+                {log.errorMessage}
+              </td>
+              <td className="px-3 py-3 text-slate-500">{formatDateTime(log.createdDt)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function StatusBadge({ status }: { status: AnnouncementStatus }) {
+  const className = {
+    모집중: "bg-emerald-50 text-emerald-700",
+    마감임박: "bg-amber-50 text-amber-700",
+    마감: "bg-slate-100 text-slate-600",
+    "상시/미정": "bg-blue-50 text-blue-700",
+  }[status];
+
+  return (
+    <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${className}`}>
+      {status}
+    </span>
+  );
+}
+
+function EmptyState({ label }: { label: string }) {
+  return <div className="rounded-lg bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">{label}</div>;
+}
+
+function formatCount(value: number): string {
+  return value.toLocaleString("ko-KR");
+}
+
+function formatDate(value: string | null): string {
+  if (!value) return "-";
+  return new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(value));
+}
+
+function formatDateTime(value: string | null): string {
+  if (!value) return "-";
+  return new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    year: "2-digit",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function formatDuration(ms: number): string {
+  if (!ms) return "-";
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}초`;
+}
+
+function uniqueOptions(values: string[]): string[] {
+  return [...new Set(values.filter((value) => value && value !== "미입력"))].sort((a, b) =>
+    a.localeCompare(b, "ko")
+  );
+}
+
+function joinLabels(values: string[]): string {
+  return values.length > 0 ? values.join(", ") : "미입력";
 }
