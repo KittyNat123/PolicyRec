@@ -2,7 +2,7 @@ name: Weekly PolicyRec Data Collection
 
 on:
   schedule:
-    - cron: '0 21 * * 0'
+    - cron: '0 21 * * 2'
   workflow_dispatch:
 
 env:
