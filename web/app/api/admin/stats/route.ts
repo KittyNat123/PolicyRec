@@ -45,6 +45,10 @@ type BatchLogRow = {
   created_dt: string | null;
 };
 
+type ScrapAnnIdRow = {
+  ann_id: number | string | null;
+};
+
 type DistributionItem = {
   label: string;
   count: number;
@@ -53,6 +57,8 @@ type DistributionItem = {
 const PAGE_SIZE = 1000;
 const EMPTY_LABEL = "미입력";
 const STANDING_LABEL = "상시/미정";
+// ☑️수정: user_info.age_group 숫자 문자열을 데모용 고정 나이대 구간으로 묶기 위한 표시 순서
+const AGE_BUCKET_ORDER = ["10대 이하", "20대", "30대", "40대", "50대", "60대 이상", EMPTY_LABEL];
 
 // ☑️수정: 관리자 대시보드가 DB를 변경하지 않도록 모든 데이터 접근을 select 조회로만 구성
 async function isAdmin(loginId: string): Promise<boolean> {
@@ -137,6 +143,37 @@ function toDistribution(map: Map<string, number>, limit = 12): DistributionItem[
     .slice(0, limit);
 }
 
+// ☑️수정: age_group 원본값(예: "22", "35")을 숫자로 변환해 고정 연령대 구간으로 정규화
+function normalizeAgeBucket(value: string | null): string {
+  const trimmed = value?.trim();
+  if (!trimmed) return EMPTY_LABEL;
+
+  const age = Number(trimmed);
+  if (!Number.isFinite(age) || age < 0) return EMPTY_LABEL;
+  if (age <= 19) return "10대 이하";
+  if (age <= 29) return "20대";
+  if (age <= 39) return "30대";
+  if (age <= 49) return "40대";
+  if (age <= 59) return "50대";
+  return "60대 이상";
+}
+
+function toAgeDistribution(map: Map<string, number>): DistributionItem[] {
+  return AGE_BUCKET_ORDER.map((label) => ({
+    label,
+    count: map.get(label) ?? 0,
+  }));
+}
+
+function normalizeAnnId(value: number | string | null): number | null {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  }
+  return null;
+}
+
 // ☑️수정: 분야/지역/source 분포는 별도 DB 함수 없이 select 페이지네이션으로 안전하게 집계
 async function fetchAllRows<T>(table: string, columns: string): Promise<T[]> {
   const rows: T[] = [];
@@ -188,6 +225,7 @@ export async function GET(request: NextRequest) {
       scrapsResult,
       announcementRows,
       userInfoRows,
+      scrapAnnRows,
       recentUsersResult,
       recentBatchLogsResult,
       allBatchLogs,
@@ -227,6 +265,7 @@ export async function GET(request: NextRequest) {
         "user_info",
         "login_id,nickname,name,age_group,regions,categories,user_type,created_dt"
       ),
+      fetchAllRows<ScrapAnnIdRow>("scraps", "ann_id"),
       supabase
         .from("users")
         .select("login_id,role,created_dt")
@@ -287,7 +326,7 @@ export async function GET(request: NextRequest) {
 
     userInfoRows.forEach((row) => {
       if (row.login_id) userInfoByLoginId.set(row.login_id, row);
-      addCount(ageMap, row.age_group);
+      addCount(ageMap, normalizeAgeBucket(row.age_group));
       addListCounts(userRegionMap, row.regions);
       addListCounts(interestMap, row.categories);
       addCount(userTypeMap, row.user_type);
@@ -297,7 +336,7 @@ export async function GET(request: NextRequest) {
       const info = user.login_id ? userInfoByLoginId.get(user.login_id) : undefined;
       return {
         displayName: displayUserName(info, user.login_id),
-        ageGroup: normalizeText(info?.age_group),
+        ageGroup: normalizeAgeBucket(info?.age_group ?? null),
         regions: normalizeList(info?.regions ?? null).slice(0, 3),
         categories: normalizeList(info?.categories ?? null).slice(0, 3),
         userType: normalizeText(info?.user_type),
@@ -305,6 +344,35 @@ export async function GET(request: NextRequest) {
         createdDt: user.created_dt,
       };
     });
+
+    const announcementById = new Map(announcements.map((row) => [row.id, row]));
+    const scrapCountByAnnId = new Map<number, number>();
+    scrapAnnRows.forEach((row) => {
+      const annId = normalizeAnnId(row.ann_id);
+      if (!annId) return;
+      scrapCountByAnnId.set(annId, (scrapCountByAnnId.get(annId) ?? 0) + 1);
+    });
+
+    // ☑️수정: scraps.ann_id와 announcements.id를 메모리에서 연결해 인기 스크랩 정책 TOP 10 생성
+    const popularScrappedAnnouncements = [...scrapCountByAnnId.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0] - b[0])
+      .slice(0, 10)
+      .map(([annId, scrapCount], index) => {
+        const announcement = announcementById.get(annId);
+        if (!announcement) return null;
+        return {
+          rank: index + 1,
+          id: announcement.id,
+          title: announcement.title,
+          provider: announcement.provider,
+          region: announcement.region,
+          category: announcement.category,
+          source: announcement.source,
+          detailUrl: announcement.detailUrl,
+          scrapCount,
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null);
 
     const recentBatchLogs = ((recentBatchLogsResult.data ?? []) as BatchLogRow[]).map((log) => ({
       logId: log.log_id,
@@ -339,10 +407,11 @@ export async function GET(request: NextRequest) {
         recent: announcements.slice(0, 10),
         rows: announcements,
       },
+      popularScrappedAnnouncements,
       users: {
         total: usersResult.count ?? 0,
         recent: recentUsers,
-        byAgeGroup: toDistribution(ageMap),
+        byAgeGroup: toAgeDistribution(ageMap),
         byRegion: toDistribution(userRegionMap),
         byInterest: toDistribution(interestMap),
         byUserType: toDistribution(userTypeMap),

@@ -25,6 +25,18 @@ type AnnouncementItem = {
   status: AnnouncementStatus;
 };
 
+type PopularScrappedAnnouncement = {
+  rank: number;
+  id: number;
+  title: string;
+  provider: string;
+  region: string;
+  category: string;
+  source: string;
+  detailUrl: string | null;
+  scrapCount: number;
+};
+
 type RecentUser = {
   displayName: string;
   ageGroup: string;
@@ -63,6 +75,7 @@ type AdminStats = {
     recent: AnnouncementItem[];
     rows: AnnouncementItem[];
   };
+  popularScrappedAnnouncements: PopularScrappedAnnouncement[];
   users: {
     total: number;
     recent: RecentUser[];
@@ -274,6 +287,10 @@ function DashboardTab({ stats }: { stats: AdminStats }) {
           <BatchLogTable logs={stats.batchLogs.recent.slice(0, 5)} compact />
         </Panel>
       </div>
+
+      <Panel title="인기 스크랩 정책 TOP 10" description="사용자들이 가장 많이 저장한 정책입니다.">
+        <PopularScrappedAnnouncementsTable items={stats.popularScrappedAnnouncements} />
+      </Panel>
     </div>
   );
 }
@@ -511,10 +528,19 @@ function MiniStat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Panel({ title, children }: { title: string; children: ReactNode }) {
+function Panel({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: ReactNode;
+}) {
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5">
       <h2 className="text-lg font-bold text-slate-950">{title}</h2>
+      {description && <p className="mt-1 text-sm text-slate-500">{description}</p>}
       <div className="mt-4">{children}</div>
     </section>
   );
@@ -657,6 +683,54 @@ function BatchLogTable({ logs, compact = false }: { logs: BatchLog[]; compact?: 
                 {log.errorMessage}
               </td>
               <td className="px-3 py-3 text-slate-500">{formatDateTime(log.createdDt)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ☑️수정: scraps.ann_id와 announcements.id 집계 결과를 read-only 인기 스크랩 정책 표로 표시
+function PopularScrappedAnnouncementsTable({ items }: { items: PopularScrappedAnnouncement[] }) {
+  if (items.length === 0) return <EmptyState label="아직 스크랩 데이터가 없습니다." />;
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[920px] text-left text-sm">
+        <thead className="bg-slate-50 text-xs font-bold text-slate-500">
+          <tr>
+            {["순위", "정책명", "기관", "지역", "분야", "source", "스크랩 수", "상세 보기"].map((head) => (
+              <th key={head} className="px-4 py-3">
+                {head}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item) => (
+            <tr key={item.id} className="border-t border-slate-100 align-top">
+              <td className="px-4 py-4 font-bold text-blue-700">{item.rank}</td>
+              <td className="max-w-[340px] px-4 py-4 font-semibold text-slate-800">{item.title}</td>
+              <td className="px-4 py-4 text-slate-600">{item.provider}</td>
+              <td className="px-4 py-4 text-slate-600">{item.region}</td>
+              <td className="px-4 py-4 text-slate-600">{item.category}</td>
+              <td className="px-4 py-4 text-slate-600">{item.source}</td>
+              <td className="px-4 py-4 font-bold text-slate-900">{formatCount(item.scrapCount)}</td>
+              <td className="px-4 py-4">
+                {item.detailUrl ? (
+                  <a
+                    href={item.detailUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-bold text-blue-700 hover:text-blue-800"
+                  >
+                    열기
+                  </a>
+                ) : (
+                  <span className="text-slate-400">-</span>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>
