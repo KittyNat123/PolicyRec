@@ -446,9 +446,20 @@ const SORT_DESCRIPTIONS: Record<SortBy, string> = {
   start_date_desc: "최근 등록된 정책부터 보여드려요.",
 };
 
+// ☑️수정: 데모에서 바로 눌러볼 대표 통합검색 문구로 인기 검색어를 정리
+const DEMO_POPULAR_KEYWORDS = [
+  "서울 청년 창업 지원",
+  "청년 자산형성 저축 지원",
+  "사회초년생 공공임대주택",
+];
+
+// ☑️수정: 문장형 질의도 통합검색 입력/검색 흐름으로 보여주기 위한 데모 버튼 문구
+const DEMO_SENTENCE_QUERY = "전세사기 피해 지원받을 수 있을까";
+
 export default function Home() {
   const [query, setQuery] = useState("");
-  const [useSavedFilterForSearch, setUseSavedFilterForSearch] = useState(false);
+  // ☑️수정: 데모 혼선을 줄이기 위해 검색 영역의 프로필 조건 반영 UI를 제거하고 자동 반영도 꺼둠
+  const useSavedFilterForSearch = false;
   const [activeSearchTab, setActiveSearchTab] = useState<SearchViewTab>(() =>
     typeof window !== "undefined" &&
       new URLSearchParams(window.location.search).get("mode") === "filtered"
@@ -765,7 +776,6 @@ export default function Home() {
     setMainRecommendationsError(null);
     setShowScrappedOnly(false);
     setQuery("");
-    setUseSavedFilterForSearch(false);
     setFilterCategories([ALL]);
     setFilterRegion([ALL]);
     setFilterTargets([ALL]);
@@ -1237,11 +1247,12 @@ export default function Home() {
     sortOverride?: ServerSortBy;
     preferredSort?: SortBy;
     appendOffset?: number; // 더보기용. 지정 시 append 모드
+    queryOverride?: string; // ☑️수정: 인기 검색어/문장형 버튼 클릭 시 state 반영 전에도 같은 검색어로 검색
   }) {
     const isConditionSearch = activeSearchTab === "filtered";
     const profileFilter =
       !isConditionSearch && currentUser && useSavedFilterForSearch ? savedFilter : null;
-    const trimmed = isConditionSearch ? "" : query.trim();
+    const trimmed = isConditionSearch ? "" : (options?.queryOverride ?? query).trim();
     const selectedCategories = isConditionSearch
       ? filterCategories.filter((value) => value !== ALL)
       : profileFilter
@@ -1397,6 +1408,12 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function handleDemoKeywordSearch(keyword: string) {
+    // ☑️수정: 데모용 인기/문장형 버튼이 통합검색 query로 바로 검색되도록 연결
+    setQuery(keyword);
+    void handleSearch({ queryOverride: keyword });
   }
 
   function handleResetFilters() {
@@ -1773,29 +1790,28 @@ export default function Home() {
                   {loading ? "검색중" : "검색"}
                 </button>
               </div>
-              {currentUser && savedFilter && (
-                <label className="mx-auto mt-3 flex w-fit cursor-pointer items-center gap-2 rounded-full bg-white/15 px-3 py-1.5 text-xs font-semibold text-white">
-                  <input
-                    type="checkbox"
-                    checked={useSavedFilterForSearch}
-                    onChange={(event) => setUseSavedFilterForSearch(event.target.checked)}
-                    className="h-3.5 w-3.5 rounded border-white/50 text-blue-600 focus:ring-white"
-                  />
-                  내 프로필 조건 함께 반영
-                </label>
-              )}
               <div className="mt-5 flex flex-wrap items-center justify-center gap-2 text-xs">
                 <span className="font-semibold text-blue-100">인기 검색어:</span>
-                {["청년 월세 지원", "창업 지원금", "취업 수당", "문화누리카드"].map((keyword) => (
+                {DEMO_POPULAR_KEYWORDS.map((keyword) => (
                   <button
                     key={keyword}
                     type="button"
-                    onClick={() => setQuery(keyword)}
+                    onClick={() => handleDemoKeywordSearch(keyword)}
                     className="rounded-full bg-white/15 px-3 py-1.5 font-semibold text-white hover:bg-white/25"
                   >
                     {keyword}
                   </button>
                 ))}
+              </div>
+              <div className="mt-3 flex flex-wrap items-center justify-center gap-2 text-xs">
+                <span className="font-semibold text-blue-100">문장으로도 가능해요!</span>
+                <button
+                  type="button"
+                  onClick={() => handleDemoKeywordSearch(DEMO_SENTENCE_QUERY)}
+                  className="rounded-full bg-white px-3 py-1.5 font-bold text-blue-700 shadow-sm hover:bg-blue-50"
+                >
+                  {DEMO_SENTENCE_QUERY}
+                </button>
               </div>
             </section>
 

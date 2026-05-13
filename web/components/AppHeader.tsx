@@ -16,7 +16,7 @@ type MenuItem = {
 const MENU_ITEMS: MenuItem[] = [
   { href: "/mypage", label: "마이페이지" },
   { href: "/scraps", label: "스크랩" },
-  { href: "/profile", label: "프로필" },
+  // ☑️수정: 데모에서 마이페이지와 프로필 메뉴가 중복되어 보이지 않도록 프로필은 메뉴에서 숨김
   { href: "/admin", label: "관리자", adminOnly: true },
 ];
 
@@ -193,7 +193,8 @@ export function AppHeader({
             <button
               type="button"
               onClick={() => setMenuOpen((open) => !open)}
-              title="프로필 메뉴"
+              // ☑️수정: 프로필을 별도 메뉴에서 숨기면서 버튼 설명도 사용자 메뉴로 정리
+              title="사용자 메뉴"
               className={`flex h-9 items-center justify-center rounded-full transition ${
                 currentUser
                   ? "w-9 overflow-hidden border border-slate-200 bg-white hover:bg-slate-50"

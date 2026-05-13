@@ -6,6 +6,17 @@ import { AppHeader } from "@/components/AppHeader";
 import { PolicyCard } from "@/components/PolicyCard";
 import type { SearchResult, User } from "@/lib/types";
 
+type Recommendation = {
+  id: number;
+  title: string;
+  detail_url: string;
+  summary: string | null;
+  region: string | null;
+  s_category: string | null;
+  apply_end_dt: string | null;
+  reason: string;
+};
+
 type ScrapRow = {
   ann_id?: unknown;
 };
@@ -28,6 +39,7 @@ export default function ScrapsPage() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [scrappedIds, setScrappedIds] = useState<Set<number>>(new Set());
   const [items, setItems] = useState<SearchResult[]>([]);
+  const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,7 +65,19 @@ export default function ScrapsPage() {
         return;
       }
 
-      const scrapsRes = await fetch("/api/mypage/scraps", { cache: "no-store" });
+      const [scrapsRes, recommendationsRes] = await Promise.all([
+        fetch("/api/mypage/scraps", { cache: "no-store" }),
+        // ☑️수정: 새 API 없이 기존 마이페이지 추천 API를 스크랩 상단 추천 공고에 재사용
+        fetch("/api/mypage/recommendations", { cache: "no-store" }),
+      ]);
+
+      if (recommendationsRes.ok) {
+        const recommendationsData = await recommendationsRes.json().catch(() => ({}));
+        setRecommendations((recommendationsData.recommendations ?? []) as Recommendation[]);
+      } else {
+        setRecommendations([]);
+      }
+
       if (!scrapsRes.ok) {
         throw new Error(
           await readApiError(scrapsRes, "스크랩 목록을 불러오지 못했어요.")
@@ -140,8 +164,27 @@ export default function ScrapsPage() {
 
         {!loading && currentUser && (
           <div className="space-y-9">
+            <section>
+              <div className="mb-4">
+                <p className="text-sm font-semibold text-blue-600">스크랩</p>
+                <h1 className="mt-1 text-2xl font-bold">스크랩 기반 추천 공고</h1>
+                <p className="mt-2 text-sm text-slate-500">
+                  최근 저장한 정책과 비슷한 공고예요.
+                </p>
+              </div>
+              <div className="grid gap-4 md:grid-cols-3">
+                {recommendations.slice(0, 3).map((item) => (
+                  <RecommendationCard key={item.id} item={item} />
+                ))}
+                {recommendations.length === 0 && (
+                  <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-sm text-slate-500 md:col-span-3">
+                    추천 공고가 아직 없어요. 관심 있는 정책을 스크랩하면 비슷한 공고를 보여드릴게요.
+                  </div>
+                )}
+              </div>
+            </section>
+
             <div>
-              <p className="text-sm font-semibold text-blue-600">스크랩</p>
               <h1 className="mt-1 text-2xl font-bold">저장한 정책 {items.length}개</h1>
             </div>
 
@@ -174,5 +217,36 @@ export default function ScrapsPage() {
         )}
       </main>
     </div>
+  );
+}
+
+function RecommendationCard({ item }: { item: Recommendation }) {
+  return (
+    <a
+      href={item.detail_url}
+      target="_blank"
+      rel="noreferrer"
+      // ☑️수정: 기존 마이페이지 추천 카드 형태를 스크랩 상단 추천 영역으로 이동
+      className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-blue-200 hover:shadow-md"
+    >
+      <div className="mb-4 flex gap-1.5">
+        <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">
+          진행중
+        </span>
+        {item.s_category && (
+          <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-700">
+            {item.s_category}
+          </span>
+        )}
+      </div>
+      <h3 className="line-clamp-2 text-lg font-bold text-slate-950">{item.title}</h3>
+      <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-600">{item.summary}</p>
+      <div className="mt-4 rounded-lg bg-blue-50 p-3 text-sm font-bold text-blue-800">
+        {item.reason}
+      </div>
+      <p className="mt-4 text-xs text-slate-500">
+        {item.apply_end_dt ? `${item.apply_end_dt} 마감` : "상시"}
+      </p>
+    </a>
   );
 }
