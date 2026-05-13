@@ -10,11 +10,15 @@ type UserInfoRow = {
   regions: string[] | null;
   categories: string[] | null;
   age_group: string | null;
+  user_type: string | null;
 };
 
 type ScrapAnnouncementRow = {
   title: string | null;
   summary: string | null;
+  s_category: string | null;
+  region: string | null;
+  support_type: string | null;
 };
 
 type ScrapRow = {
@@ -24,6 +28,12 @@ type ScrapRow = {
 
 type HybridMatchRow = {
   id: number;
+  s_category?: string | null;
+  region?: string | null;
+  target_group?: string | null;
+  target_tags?: string[] | null;
+  support_type?: string | null;
+  similarity?: number | null;
 };
 
 type RecommendationSearchResult = {
@@ -41,9 +51,183 @@ type RecommendationRow = {
   detail_url: string;
 };
 
+type ScrapPreferenceStats = {
+  categories: Record<string, number>;
+  regions: Record<string, number>;
+  supportTypes: Set<string>;
+  total: number;
+};
+
+const DEBUG_RECOMMENDATION_RANKING = process.env.NODE_ENV === "development";
+
+// ☑️수정: 추천 품질 튜닝 포인트. 비중만 바꾸면 profile/scrap reranking 성향을 조정할 수 있다.
+const PROFILE_SCORE_WEIGHTS = {
+  region: 0.4,
+  userType: 0.15,
+  category: 0.15,
+  similarity: 0.3,
+} as const;
+
+const SCRAP_SCORE_WEIGHTS = {
+  category: 0.4,
+  region: 0.3,
+  supportType: 0.2,
+  similarity: 0.1,
+} as const;
+
 function pickAnnouncementText(source: ScrapAnnouncementRow | ScrapAnnouncementRow[] | null) {
   if (Array.isArray(source)) return source[0]?.title ?? null;
   return source?.title ?? null;
+}
+
+function pickAnnouncement(source: ScrapAnnouncementRow | ScrapAnnouncementRow[] | null) {
+  if (Array.isArray(source)) return source[0] ?? null;
+  return source;
+}
+
+function incrementCount(map: Record<string, number>, key: string | null | undefined) {
+  if (!key) return;
+  map[key] = (map[key] ?? 0) + 1;
+}
+
+function buildScrapPreferenceStats(scraps: ScrapRow[]): ScrapPreferenceStats {
+  const stats: ScrapPreferenceStats = {
+    categories: {},
+    regions: {},
+    supportTypes: new Set<string>(),
+    total: 0,
+  };
+
+  for (const scrap of scraps) {
+    const announcement = pickAnnouncement(scrap.announcements);
+    if (!announcement) continue;
+
+    stats.total += 1;
+    incrementCount(stats.categories, announcement.s_category);
+    incrementCount(stats.regions, announcement.region);
+    if (announcement.support_type) stats.supportTypes.add(announcement.support_type);
+  }
+
+  return stats;
+}
+
+function roundScore(value: number) {
+  return Number(value.toFixed(4));
+}
+
+function rankProfileMatches(
+  rows: HybridMatchRow[],
+  context: {
+    scrappedIds: Set<number>;
+    selectedIds: number[];
+    region: string | null;
+    category: string | null;
+    userType: string | null;
+  }
+) {
+  const ranked = rows
+    .filter((row) => !context.scrappedIds.has(row.id) && !context.selectedIds.includes(row.id))
+    .map((row, index) => {
+      // ☑️수정: profile reranking 점수 구조
+      // region 40% + user_type 15% + category 15% + vector similarity 30%
+      const regionScore =
+        context.region && row.region === context.region ? 1 : row.region === "전국" ? 0.5 : 0;
+      const categoryScore = context.category && row.s_category === context.category ? 1 : 0;
+      const typeScore =
+        context.userType &&
+        (row.target_group?.includes(context.userType) ||
+          row.target_tags?.includes(context.userType))
+          ? 1
+          : 0;
+      const similarityScore = Number(row.similarity ?? 0);
+      const totalScore =
+        regionScore * PROFILE_SCORE_WEIGHTS.region +
+        typeScore * PROFILE_SCORE_WEIGHTS.userType +
+        categoryScore * PROFILE_SCORE_WEIGHTS.category +
+        similarityScore * PROFILE_SCORE_WEIGHTS.similarity;
+
+      return {
+        row,
+        index,
+        scores: { regionScore, typeScore, categoryScore, similarityScore },
+        totalScore,
+      };
+    })
+    .sort((a, b) => b.totalScore - a.totalScore || a.index - b.index);
+
+  if (DEBUG_RECOMMENDATION_RANKING) {
+    console.debug(
+      "[/api/mypage/recommendations] profile rerank top",
+      ranked.slice(0, 3).map(({ row, scores, totalScore }) => ({
+        id: row.id,
+        region: roundScore(scores.regionScore),
+        user_type: roundScore(scores.typeScore),
+        category: roundScore(scores.categoryScore),
+        similarity: roundScore(scores.similarityScore),
+        total: roundScore(totalScore),
+      }))
+    );
+  }
+
+  return ranked
+    .map((item) => item.row);
+}
+
+function rankScrapMatches(
+  rows: HybridMatchRow[],
+  context: {
+    scrappedIds: Set<number>;
+    selectedIds: number[];
+    stats: ScrapPreferenceStats;
+  }
+) {
+  const ranked = rows
+    .filter((row) => !context.scrappedIds.has(row.id) && !context.selectedIds.includes(row.id))
+    .map((row, index) => {
+      // ☑️수정: scrap reranking 점수 구조
+      // category 40% + region 30% + support_type 20% + vector similarity 10%
+      const categoryScore =
+        context.stats.total > 0 && row.s_category
+          ? (context.stats.categories[row.s_category] ?? 0) / context.stats.total
+          : 0;
+      const regionScore =
+        context.stats.total > 0 && row.region
+          ? (context.stats.regions[row.region] ?? 0) / context.stats.total
+          : 0;
+      const supportTypeScore =
+        row.support_type && context.stats.supportTypes.has(row.support_type) ? 1 : 0;
+      const similarityScore = Number(row.similarity ?? 0);
+      const totalScore =
+        categoryScore * SCRAP_SCORE_WEIGHTS.category +
+        regionScore * SCRAP_SCORE_WEIGHTS.region +
+        supportTypeScore * SCRAP_SCORE_WEIGHTS.supportType +
+        similarityScore * SCRAP_SCORE_WEIGHTS.similarity;
+
+      return {
+        row,
+        index,
+        scores: { categoryScore, regionScore, supportTypeScore, similarityScore },
+        totalScore,
+      };
+    })
+    .sort((a, b) => b.totalScore - a.totalScore || a.index - b.index);
+
+  if (DEBUG_RECOMMENDATION_RANKING) {
+    console.debug(
+      "[/api/mypage/recommendations] scrap rerank top",
+      ranked.slice(0, 3).map(({ row, scores, totalScore }) => ({
+        id: row.id,
+        category: roundScore(scores.categoryScore),
+        region: roundScore(scores.regionScore),
+        support_type: roundScore(scores.supportTypeScore),
+        similarity: roundScore(scores.similarityScore),
+        total: roundScore(totalScore),
+      }))
+    );
+  }
+
+  return ranked
+    .map((item) => item.row);
 }
 
 async function findRecommendationMatches(
@@ -116,7 +300,7 @@ export async function GET(request: NextRequest) {
   try {
     const { data: userInfo, error: userInfoError } = await supabase
       .from("user_info")
-      .select("regions, categories, age_group")
+      .select("regions, categories, age_group, user_type")
       .eq("login_id", loginId)
       .maybeSingle();
 
@@ -128,13 +312,14 @@ export async function GET(request: NextRequest) {
     const region = typedUserInfo?.regions?.[0] ?? null;
     const category = typedUserInfo?.categories?.[0] ?? null;
     const age = typedUserInfo?.age_group ? Number.parseInt(typedUserInfo.age_group, 10) : null;
+    const userType = typedUserInfo?.user_type?.trim() || null;
     const profileReady = Boolean(region && category && Number.isInteger(age));
 
     const { data: scraps, error: scrapError } = await supabase
       .from("scraps")
       .select(`
         ann_id,
-        announcements ( title, summary )
+        announcements ( title, summary, s_category, region, support_type )
       `)
       .eq("login_id", loginId)
       .order("created_dt", { ascending: false })
@@ -151,6 +336,7 @@ export async function GET(request: NextRequest) {
       .filter((title): title is string => Boolean(title))
       .join(", ");
     const scrapReady = scrapTitles.length > 0;
+    const scrapStats = buildScrapPreferenceStats(typedScraps);
 
     if (!profileReady && !scrapReady) {
       return NextResponse.json({
@@ -173,11 +359,21 @@ export async function GET(request: NextRequest) {
     const warnings: string[] = [];
 
     if (profileReady) {
-      const profileQueryText = `지역: ${region}, 나이: ${age}세, 관심 분야: ${category}. 이 조건에 잘 맞는 지원 공고를 추천해주세요.`;
+      const profileQueryText = `지역: ${region}, 나이: ${age}세, 관심 분야: ${category}.${
+        userType ? ` 사용자 유형: ${userType}.` : ""
+      } 이 조건에 잘 맞는 지원 공고를 추천해주세요.`;
       const profileSearch = await findRecommendationMatches(profileQueryText, rpcBaseParams);
       if (profileSearch.warning) warnings.push(`profile: ${profileSearch.warning}`);
 
-      for (const row of profileSearch.rows) {
+      const rankedProfileRows = rankProfileMatches(profileSearch.rows, {
+        scrappedIds,
+        selectedIds: recommendationIds,
+        region,
+        category,
+        userType,
+      });
+
+      for (const row of rankedProfileRows) {
         if (!scrappedIds.has(row.id) && !recommendationIds.includes(row.id)) {
           recommendationIds.push(row.id);
           reasonMap.set(row.id, `${region}, ${category}, ${age}세 조건에 맞춰 고른 공고예요.`);
@@ -191,7 +387,13 @@ export async function GET(request: NextRequest) {
       const scrapSearch = await findRecommendationMatches(scrapQueryText, rpcBaseParams);
       if (scrapSearch.warning) warnings.push(`scrap: ${scrapSearch.warning}`);
 
-      for (const row of scrapSearch.rows) {
+      const rankedScrapRows = rankScrapMatches(scrapSearch.rows, {
+        scrappedIds,
+        selectedIds: recommendationIds,
+        stats: scrapStats,
+      });
+
+      for (const row of rankedScrapRows) {
         if (!scrappedIds.has(row.id) && !recommendationIds.includes(row.id)) {
           recommendationIds.push(row.id);
           reasonMap.set(row.id, "최근 스크랩한 정책과 비슷한 흐름의 공고예요.");
