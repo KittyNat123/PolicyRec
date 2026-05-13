@@ -27,6 +27,7 @@ export const dynamic = "force-dynamic";
 const MATCH_COUNT = 30;
 const RESULT_COUNT = 5;
 const MATCH_THRESHOLD = 0.65;
+const TITLE_FALLBACK_MATCH_LIMIT = 30;
 const NATIONWIDE_REGION = "전국";
 const REGION_ALIAS_GROUPS: string[][] = [
   ["강원특별자치도", "강원도"],
@@ -455,6 +456,90 @@ function rowMatchesAge(row: Record<string, unknown>, userAge: number | null) {
 function compareByFinalScoreDescThenIdAsc(a: RerankRow, b: RerankRow) {
   if (a.final_score !== b.final_score) return b.final_score - a.final_score;
   return a.id - b.id;
+}
+
+function normalizeAnnouncementKeyword(value: string) {
+  return value.replace(/[^\p{L}\p{N}]/gu, "").toLowerCase();
+}
+
+function stripTrailingKoreanParticles(value: string) {
+  let keyword = value;
+  for (let i = 0; i < 3; i += 1) {
+    const next = keyword.replace(/(에서|에게|으로|로|은|는|이|가|을|를|와|과|랑|의|도|만)$/u, "");
+    if (next === keyword) break;
+    keyword = next;
+  }
+  return keyword;
+}
+
+function isApplicationGuideQuestion(message: string) {
+  // ☑️수정: 신청가이드성 질문에서만 공고명 부분검색 fallback을 켜 기존 추천 흐름 영향을 줄인다.
+  const compact = normalizeAnnouncementKeyword(message);
+  if (!compact.includes("신청") && !compact.includes("접수") && !compact.includes("서류")) {
+    return false;
+  }
+  return [
+    "신청방법",
+    "신청절차",
+    "필요서류",
+    "제출서류",
+    "어떻게",
+    "어디서",
+    "하려면",
+    "하나요",
+    "해요",
+    "알려줘",
+    "알려주세요",
+    "절차",
+    "서류",
+    "접수",
+  ].some((signal) => compact.includes(signal));
+}
+
+function extractAnnouncementKeywordCandidates(question: string) {
+  if (!isApplicationGuideQuestion(question)) return [];
+
+  // ☑️수정: "넥스트로컬 사업 어떻게 신청해요?" 같은 문장에서 안내 표현을 걷어내고 고유명사 후보만 남긴다.
+  const guideNoise =
+    /(신청\s*방법|신청\s*절차|필요\s*서류|제출\s*서류|어떻게|어디서|하려면|하나요|해요|해주세요|해줘|알려주세요|알려줘|사업|공고|정책|지원|관련|대한|자세히|좀|신청|접수|방법|절차|서류|필요|제출|안내|하려고|하는|하려|하면|해)/gu;
+  const spaced = question
+    .replace(/[()[\]{}"'`“”‘’?!.,:;<>]/g, " ")
+    .replace(guideNoise, " ")
+    .split(/\s+/)
+    .map((part) => stripTrailingKoreanParticles(part.trim()))
+    .filter((part) => normalizeAnnouncementKeyword(part).length >= 3);
+
+  const compact = stripTrailingKoreanParticles(
+    question.replace(guideNoise, "").replace(/[()[\]{}"'`“”‘’?!.,:;<>~\s]/g, "")
+  );
+  const candidates = [compact, ...spaced]
+    .map((part) => normalizeAnnouncementKeyword(part))
+    .filter((part) => part.length >= 3 && !/^\d+$/.test(part));
+
+  return Array.from(new Set(candidates))
+    .sort((a, b) => b.length - a.length)
+    .slice(0, 5);
+}
+
+function buildTextSearchOr(candidates: string[], columns: string[]) {
+  return candidates
+    .flatMap((candidate) =>
+      columns.map((column) => `${column}.ilike.%${candidate}%`)
+    )
+    .join(",");
+}
+
+function calculateTitleFallbackScore(row: NormalizedResultRow, candidates: string[]) {
+  const title = normalizeAnnouncementKeyword(String(row.title ?? ""));
+  const summary = normalizeAnnouncementKeyword(row.summary ?? "");
+  const content = normalizeAnnouncementKeyword(String(row.content ?? ""));
+
+  return candidates.reduce((score, candidate) => {
+    if (title.includes(candidate)) return Math.max(score, 1000 + candidate.length);
+    if (summary.includes(candidate)) return Math.max(score, 700 + candidate.length);
+    if (content.includes(candidate)) return Math.max(score, 500 + candidate.length);
+    return score;
+  }, 0);
 }
 
 function normalizeResultRow(row: Record<string, unknown>): NormalizedResultRow {
@@ -1019,6 +1104,60 @@ async function searchAnnouncementResults({
     .slice(0, RESULT_COUNT);
 }
 
+async function searchAnnouncementTitleFallback(candidates: string[]) {
+  if (candidates.length === 0) return [];
+
+  // ☑️수정: 특정 공고 신청가이드 질문은 프로필 필터보다 공고명 부분검색을 우선한다.
+  let data: unknown[] | null = null;
+  let error: SupabaseLikeError | null = null;
+
+  for (const schema of ["primary_extended", "primary", "legacy"] as const) {
+    const resultWithContent = await supabase
+      .from("announcements")
+      .select(columnsForSchema(schema))
+      .or(buildTextSearchOr(candidates, ["title", "summary", "content"]))
+      .limit(TITLE_FALLBACK_MATCH_LIMIT);
+    data = resultWithContent.data as unknown[] | null;
+    error = resultWithContent.error;
+
+    if (error && isMissingColumnError(error)) {
+      const resultWithoutContent = await supabase
+        .from("announcements")
+        .select(columnsForSchema(schema))
+        .or(buildTextSearchOr(candidates, ["title", "summary"]))
+        .limit(TITLE_FALLBACK_MATCH_LIMIT);
+      data = resultWithoutContent.data as unknown[] | null;
+      error = resultWithoutContent.error;
+    }
+
+    if (!error || !isMissingColumnError(error)) break;
+  }
+
+  if (error) throw new Error(error.message);
+
+  return ((data ?? []) as Array<Record<string, unknown>>)
+    .map((row) => {
+      const normalized = normalizeResultRow(row);
+      const id = toNullableNumber(normalized.id) ?? 0;
+      const textScore = calculateTitleFallbackScore(normalized, candidates);
+      return {
+        ...normalized,
+        id,
+        similarity: 0,
+        final_score: textScore,
+        match_bonus: textScore,
+      } satisfies RerankRow;
+    })
+    .filter(
+      (row) =>
+        row.id > 0 &&
+        row.final_score > 0 &&
+        recruitmentStatus(row.apply_start_dt, row.apply_end_dt) !== "마감"
+    )
+    .sort(compareByFinalScoreDescThenIdAsc)
+    .slice(0, RESULT_COUNT);
+}
+
 async function selectProfileFallbackRows({
   filterCategory,
   filterRegion,
@@ -1333,15 +1472,24 @@ export async function POST(request: NextRequest) {
           : (userContext?.targetAge ?? null),
     };
 
-    const queryEmbedding = await getQueryEmbedding(embeddingQuery);
-    let results = await searchAnnouncementResults({
-      queryEmbedding,
-      filterCategory: effectiveFilterCategory,
-      filterRegion: effectiveFilterRegion,
-      userAge: effectiveUserAge,
-    });
+    const titleFallbackCandidates = extractAnnouncementKeywordCandidates(question);
+    let matchedByTitleFallback = false;
+    // ☑️수정: 신청가이드 질문에서 공고명이 보이면 프로필/history 필터 없는 title/summary/content 검색을 먼저 시도
+    let results = await searchAnnouncementTitleFallback(titleFallbackCandidates);
+    matchedByTitleFallback = results.length > 0;
 
-    if (usesStoredProfileRequest && results.length === 0) {
+    let queryEmbedding: number[] | null = null;
+    if (!matchedByTitleFallback) {
+      queryEmbedding = await getQueryEmbedding(embeddingQuery);
+      results = await searchAnnouncementResults({
+        queryEmbedding,
+        filterCategory: effectiveFilterCategory,
+        filterRegion: effectiveFilterRegion,
+        userAge: effectiveUserAge,
+      });
+    }
+
+    if (usesStoredProfileRequest && results.length === 0 && queryEmbedding) {
       // ☑️수정: 프로필 기반 추천은 strict 지역/분야/나이 조합이 비면 프로필 의미 query를 유지한 채 단계적으로 완화
       const relaxedAttempts = [
         {
@@ -1414,7 +1562,10 @@ export async function POST(request: NextRequest) {
         question,
         policies,
         history,
-        userContext: effectiveUserContext,
+        // ☑️수정: 공고명 fallback으로 찾은 신청가이드 답변은 프로필 조건을 답변 근거처럼 주입하지 않는다.
+        userContext: matchedByTitleFallback
+          ? { loginId: userContext?.loginId ?? null }
+          : effectiveUserContext,
       });
     } catch (error) {
       console.warn("[/api/chat/rag] Gemini answer failed:", error);
@@ -1424,6 +1575,7 @@ export async function POST(request: NextRequest) {
     if (filterConflicts.length > 0 && confirmedFilterOverride) {
       reply = `좋아요. 이번 대화에서는 방금 말씀하신 조건을 우선해서 찾아봤어요.\n\n${reply}`;
     } else if (
+      !matchedByTitleFallback &&
       policies.length > 0 &&
       (usesStoredProfileRequest || history.length === 0) &&
       hasUserProfile(profileContributionContext)
