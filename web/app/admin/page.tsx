@@ -225,36 +225,18 @@ function DashboardTab({ stats }: { stats: AdminStats }) {
 
   return (
     <div className="space-y-6">
+      {/* ☑️수정: 발표 첫 화면은 실제 DB 핵심 요약 4개만 남겨 복잡도를 줄임 */}
       <div className="grid gap-4 md:grid-cols-4">
         <AdminMetric label="전체 공고 수" value={formatCount(stats.announcements.total)} sub="announcements" tone="blue" />
         <AdminMetric label="모집중 공고 수" value={formatCount(stats.announcements.open)} sub="마감임박 포함" tone="green" />
-        <AdminMetric label="마감 공고 수" value={formatCount(stats.announcements.closed)} sub="apply_end_dt 기준" tone="slate" />
-        <AdminMetric label="마감임박 공고 수" value={formatCount(stats.announcements.urgent)} sub="오늘부터 7일 이내" tone="amber" />
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-4">
-        <AdminMetric
-          label="임베딩 생성 공고"
-          value={formatCount(stats.announcements.embeddingCount)}
-          sub={`${stats.announcements.embeddingRatio}%`}
-          tone="violet"
-        />
         <AdminMetric label="전체 가입자 수" value={formatCount(stats.users.total)} sub="users" tone="blue" />
         <AdminMetric label="전체 스크랩 수" value={formatCount(stats.scraps.total)} sub="scraps" tone="green" />
-        <AdminMetric label="실패 로그 수" value={formatCount(stats.batchLogs.failureCount)} sub="api_batch_logs" tone="red" />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-        <Panel title="공고 상태 현황">
+      {/* ☑️수정: 데모에서 빈 수집 상태 카드 대신 공고 상태 현황을 가로 전체 폭으로 강조 */}
+      <div className="grid gap-4">
+        <Panel title="공고 상태 현황" emphasis>
           <StatusRatioBar items={statusItems} total={stats.announcements.total} />
-        </Panel>
-        <Panel title="최근 수집 상태">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <MiniStat label="상태" value={stats.batchLogs.latestStatus} />
-            <MiniStat label="수집 건수" value={formatCount(stats.batchLogs.latestTotalCount)} />
-            <MiniStat label="삽입 건수" value={formatCount(stats.batchLogs.latestInsertedCount)} />
-            <MiniStat label="소요 시간" value={formatDuration(stats.batchLogs.latestExecutionTimeMs)} />
-          </div>
         </Panel>
       </div>
 
@@ -270,27 +252,16 @@ function DashboardTab({ stats }: { stats: AdminStats }) {
         </Panel>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[1fr_1.2fr]">
-        <Panel title="사용자 나이대 분포">
-          <VerticalBars items={stats.users.byAgeGroup} />
-        </Panel>
-        <Panel title="관심분야 분포">
-          <HorizontalBars items={stats.users.byInterest} />
-        </Panel>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
+      {/* ☑️수정: 사용자 분포 그래프는 사용자 현황 탭에만 남기고 대시보드에서는 숨김 */}
+      {/* ☑️수정: 하단 목록은 발표 가독성을 위해 나란히가 아닌 전체 폭 카드로 세로 배치 */}
+      <div className="space-y-4">
         <Panel title="최근 등록/업데이트 공고 10개">
           <AnnouncementCompactList items={stats.announcements.recent} />
         </Panel>
-        <Panel title="최근 수집 로그">
-          <BatchLogTable logs={stats.batchLogs.recent.slice(0, 5)} compact />
+        <Panel title="인기 스크랩 정책 TOP 10" description="사용자들이 가장 많이 저장한 정책입니다.">
+          <PopularScrappedAnnouncementsTable items={stats.popularScrappedAnnouncements} />
         </Panel>
       </div>
-
-      <Panel title="인기 스크랩 정책 TOP 10" description="사용자들이 가장 많이 저장한 정책입니다.">
-        <PopularScrappedAnnouncementsTable items={stats.popularScrappedAnnouncements} />
-      </Panel>
     </div>
   );
 }
@@ -458,10 +429,7 @@ function UsersTab({ stats }: { stats: AdminStats }) {
         </div>
         {stats.users.recent.length === 0 && <EmptyState label="최근 가입자 데이터가 없습니다." />}
       </Panel>
-
-      <Panel title="최근 수집 로그">
-        <BatchLogTable logs={stats.batchLogs.recent} />
-      </Panel>
+      {/* ☑️수정: 데모 기준 빈 api_batch_logs 영역은 사용자 현황 화면에서도 노출하지 않음 */}
     </div>
   );
 }
@@ -531,15 +499,21 @@ function MiniStat({ label, value }: { label: string; value: string }) {
 function Panel({
   title,
   description,
+  emphasis = false,
   children,
 }: {
   title: string;
   description?: string;
+  emphasis?: boolean;
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-5">
-      <h2 className="text-lg font-bold text-slate-950">{title}</h2>
+    <section
+      className={`rounded-lg border bg-white p-5 ${
+        emphasis ? "border-blue-200 shadow-sm ring-1 ring-blue-100" : "border-slate-200"
+      }`}
+    >
+      <h2 className={`${emphasis ? "text-xl" : "text-lg"} font-bold text-slate-950`}>{title}</h2>
       {description && <p className="mt-1 text-sm text-slate-500">{description}</p>}
       <div className="mt-4">{children}</div>
     </section>
@@ -618,12 +592,12 @@ function StatusRatioBar({
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         {items.map((item) => (
-          <div key={item.label} className="flex items-center justify-between gap-3 text-sm">
+          <div key={item.label} className="rounded-lg border border-slate-100 bg-slate-50 px-4 py-3 text-sm">
             <span className="inline-flex min-w-0 items-center gap-2 text-slate-600">
               <span className={`h-2.5 w-2.5 rounded-full ${item.color}`} />
               {item.label}
             </span>
-            <span className="font-bold text-slate-900">{formatCount(item.count)}</span>
+            <span className="float-right text-base font-bold text-slate-900">{formatCount(item.count)}</span>
           </div>
         ))}
       </div>
@@ -692,16 +666,33 @@ function BatchLogTable({ logs, compact = false }: { logs: BatchLog[]; compact?: 
 }
 
 // ☑️수정: scraps.ann_id와 announcements.id 집계 결과를 read-only 인기 스크랩 정책 표로 표시
-function PopularScrappedAnnouncementsTable({ items }: { items: PopularScrappedAnnouncement[] }) {
+function PopularScrappedAnnouncementsTable({
+  items,
+  compact = false,
+}: {
+  items: PopularScrappedAnnouncement[];
+  compact?: boolean;
+}) {
   if (items.length === 0) return <EmptyState label="아직 스크랩 데이터가 없습니다." />;
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[920px] text-left text-sm">
+      {/* ☑️수정: 전체 폭 카드에서 정책명 컬럼을 넓게 잡아 TOP 10 표의 가로 스크롤을 최소화 */}
+      <table className={`${compact ? "min-w-[760px]" : "min-w-[860px]"} w-full table-fixed text-left text-sm`}>
+        <colgroup>
+          <col className="w-[56px]" />
+          <col className="w-[34%]" />
+          <col className="w-[16%]" />
+          <col className="w-[11%]" />
+          <col className="w-[11%]" />
+          <col className="w-[11%]" />
+          <col className="w-[86px]" />
+          <col className="w-[76px]" />
+        </colgroup>
         <thead className="bg-slate-50 text-xs font-bold text-slate-500">
           <tr>
             {["순위", "정책명", "기관", "지역", "분야", "source", "스크랩 수", "상세 보기"].map((head) => (
-              <th key={head} className="px-4 py-3">
+              <th key={head} className="px-3 py-3">
                 {head}
               </th>
             ))}
@@ -710,14 +701,14 @@ function PopularScrappedAnnouncementsTable({ items }: { items: PopularScrappedAn
         <tbody>
           {items.map((item) => (
             <tr key={item.id} className="border-t border-slate-100 align-top">
-              <td className="px-4 py-4 font-bold text-blue-700">{item.rank}</td>
-              <td className="max-w-[340px] px-4 py-4 font-semibold text-slate-800">{item.title}</td>
-              <td className="px-4 py-4 text-slate-600">{item.provider}</td>
-              <td className="px-4 py-4 text-slate-600">{item.region}</td>
-              <td className="px-4 py-4 text-slate-600">{item.category}</td>
-              <td className="px-4 py-4 text-slate-600">{item.source}</td>
-              <td className="px-4 py-4 font-bold text-slate-900">{formatCount(item.scrapCount)}</td>
-              <td className="px-4 py-4">
+              <td className="px-3 py-4 font-bold text-blue-700">{item.rank}</td>
+              <td className="truncate px-3 py-4 font-semibold text-slate-800" title={item.title}>{item.title}</td>
+              <td className="truncate px-3 py-4 text-slate-600" title={item.provider}>{item.provider}</td>
+              <td className="truncate px-3 py-4 text-slate-600" title={item.region}>{item.region}</td>
+              <td className="truncate px-3 py-4 text-slate-600" title={item.category}>{item.category}</td>
+              <td className="truncate px-3 py-4 text-slate-600" title={item.source}>{item.source}</td>
+              <td className="px-3 py-4 font-bold text-slate-900">{formatCount(item.scrapCount)}</td>
+              <td className="px-3 py-4">
                 {item.detailUrl ? (
                   <a
                     href={item.detailUrl}

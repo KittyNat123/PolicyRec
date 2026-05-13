@@ -59,6 +59,8 @@ const EMPTY_LABEL = "미입력";
 const STANDING_LABEL = "상시/미정";
 // ☑️수정: user_info.age_group 숫자 문자열을 데모용 고정 나이대 구간으로 묶기 위한 표시 순서
 const AGE_BUCKET_ORDER = ["10대 이하", "20대", "30대", "40대", "50대", "60대 이상", EMPTY_LABEL];
+// ☑️수정: 사용자 분포 그래프에서 선택하지 않은 값 계열은 모두 미입력으로 통합
+const EMPTY_PROFILE_VALUES = new Set(["", "선택 안함", "선택안함", "미선택", "없음", "-", "null", "undefined"]);
 
 // ☑️수정: 관리자 대시보드가 DB를 변경하지 않도록 모든 데이터 접근을 select 조회로만 구성
 async function isAdmin(loginId: string): Promise<boolean> {
@@ -122,9 +124,26 @@ function normalizeList(value: string[] | string | null): string[] {
   return [];
 }
 
+function normalizeProfileLabel(value: string | null | undefined): string {
+  const trimmed = value?.trim() ?? "";
+  return EMPTY_PROFILE_VALUES.has(trimmed) || EMPTY_PROFILE_VALUES.has(trimmed.toLowerCase())
+    ? EMPTY_LABEL
+    : trimmed;
+}
+
 function addCount(target: Map<string, number>, rawLabel: string | null | undefined) {
   const label = normalizeText(rawLabel);
   target.set(label, (target.get(label) ?? 0) + 1);
+}
+
+function addProfileCount(target: Map<string, number>, rawLabel: string | null | undefined) {
+  const label = normalizeProfileLabel(rawLabel);
+  target.set(label, (target.get(label) ?? 0) + 1);
+}
+
+function normalizeProfileList(value: string[] | string | null): string[] {
+  const labels = normalizeList(value).map(normalizeProfileLabel);
+  return labels.length > 0 ? [...new Set(labels)] : [EMPTY_LABEL];
 }
 
 function addListCounts(target: Map<string, number>, values: string[] | string | null) {
@@ -134,6 +153,10 @@ function addListCounts(target: Map<string, number>, values: string[] | string | 
     return;
   }
   normalized.forEach((value) => addCount(target, value));
+}
+
+function addProfileListCounts(target: Map<string, number>, values: string[] | string | null) {
+  normalizeProfileList(values).forEach((value) => addProfileCount(target, value));
 }
 
 function toDistribution(map: Map<string, number>, limit = 12): DistributionItem[] {
@@ -327,9 +350,9 @@ export async function GET(request: NextRequest) {
     userInfoRows.forEach((row) => {
       if (row.login_id) userInfoByLoginId.set(row.login_id, row);
       addCount(ageMap, normalizeAgeBucket(row.age_group));
-      addListCounts(userRegionMap, row.regions);
-      addListCounts(interestMap, row.categories);
-      addCount(userTypeMap, row.user_type);
+      addProfileListCounts(userRegionMap, row.regions);
+      addProfileListCounts(interestMap, row.categories);
+      addProfileCount(userTypeMap, row.user_type);
     });
 
     const recentUsers = ((recentUsersResult.data ?? []) as UserRow[]).map((user) => {
@@ -337,9 +360,9 @@ export async function GET(request: NextRequest) {
       return {
         displayName: displayUserName(info, user.login_id),
         ageGroup: normalizeAgeBucket(info?.age_group ?? null),
-        regions: normalizeList(info?.regions ?? null).slice(0, 3),
-        categories: normalizeList(info?.categories ?? null).slice(0, 3),
-        userType: normalizeText(info?.user_type),
+        regions: normalizeProfileList(info?.regions ?? null).slice(0, 3),
+        categories: normalizeProfileList(info?.categories ?? null).slice(0, 3),
+        userType: normalizeProfileLabel(info?.user_type),
         role: user.role === "admin" ? "admin" : "user",
         createdDt: user.created_dt,
       };
