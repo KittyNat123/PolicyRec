@@ -10,14 +10,13 @@ import type { User } from "@/lib/types";
 type MenuItem = {
   href: string;
   label: string;
-  adminOnly?: boolean;
 };
 
 const MENU_ITEMS: MenuItem[] = [
   { href: "/mypage", label: "마이페이지" },
   { href: "/scraps", label: "스크랩" },
   // ☑️수정: 데모에서 마이페이지와 프로필 메뉴가 중복되어 보이지 않도록 프로필은 메뉴에서 숨김
-  { href: "/admin", label: "관리자", adminOnly: true },
+  // ☑️수정: 관리자 진입은 상단 관리자 버튼 하나만 유지하고 드롭다운 중복 메뉴는 제거
 ];
 
 const OPEN_CHAT_KEY = "policyrec-open-chat";
@@ -76,9 +75,7 @@ export function AppHeader({
   const [dialogMode, setDialogMode] = useState<"login" | "signup">("login");
   const menuRef = useRef<HTMLDivElement | null>(null);
   const authPromptHandledRef = useRef(false);
-  const visibleItems = currentUser
-    ? MENU_ITEMS.filter((item) => !item.adminOnly || currentUser.role === "admin")
-    : [];
+  const visibleItems = currentUser ? MENU_ITEMS : [];
   const isAdmin = currentUser?.role === "admin" || currentUser?.login_id === "admin";
 
   useEffect(() => {
