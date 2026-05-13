@@ -51,7 +51,6 @@ gitignore/
 데이터 수집 파이프라인 초안.ipynb
 *_kwon*
 *.gsheet*
-PolicyRec_v1_1_*.ipynb
 *.dll
 *.node
 
