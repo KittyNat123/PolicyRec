@@ -50,7 +50,7 @@ const TARGET_SEARCH_TERMS: Record<string, string> = {
 };
 
 type SortBy = "recommended_desc" | "end_date_asc" | "start_date_desc"; // ☑️수정: 스크랩 많은 순(scrap_count_desc) 제거
-type ServerSortBy = Exclude<SortBy, "recommended_desc">; // ☑️수정: 서버 정렬 파라미터에는 마감순/최신순만 전달
+type ServerSortBy = SortBy; // ☑️수정: 조건검색 추천순은 서버 filter-only 경로에서 condition_score로 처리
 
 // ☑️수정: 깨진 한글 카테고리 매핑 복구
 const CATEGORY_API_MAP: Record<string, string> = {
@@ -405,8 +405,8 @@ function sortResultsClientSide(
 }
 
 function toServerSortBy(sortBy: SortBy): ServerSortBy {
-  // ☑️수정: 추천순은 서버 sort_by 값이 아니므로 기본 서버 정렬값으로 변환
-  return sortBy === "recommended_desc" ? "end_date_asc" : sortBy;
+  // ☑️수정: recommended_desc를 마감순으로 바꾸지 않고 서버까지 그대로 전달
+  return sortBy;
 }
 
 function buildRecommendationQueryFromFilters({
@@ -1352,6 +1352,8 @@ export default function Home() {
           filter_category: hardFilterCategory,
           filter_region: hardFilterRegion,
           user_age: targetAge,
+          // ☑️수정: 대상에서 유도된 나이 범위는 필터링에만 쓰고 condition_score 나이 가점에는 쓰지 않음
+          condition_score_age: isConditionSearch && Boolean(filterAge.trim()),
           ...ageRangePayload,
           // ☑️수정: 검색어 없을 때만 정렬/페이지네이션 적용 (키워드 검색은 서버 리랭킹 순서 사용)
           ...(effectiveQuery === "" && {

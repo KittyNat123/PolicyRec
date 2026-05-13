@@ -34,6 +34,10 @@ export const dynamic = "force-dynamic";
 const DEFAULT_MATCH_COUNT = 10;
 const FILTERED_FALLBACK_MATCH_COUNT = 100;
 const FILTER_ONLY_MATCH_COUNT = 600;
+// ☑️수정: 조건검색 추천순은 기존 통합검색의 지역/나이 가점에 분야 가점만 추가
+const CONDITION_REGION_BONUS = 30;
+const CONDITION_CATEGORY_BONUS = 20;
+const CONDITION_AGE_BONUS = 10;
 
 // 카드 표시에 필요한 컬럼들 (announcements 테이블에서 SELECT)
 // 누락된 컬럼이 DB에 있을 수도 있고 없을 수도 있어 안전하게 별표(*) 대신 명시
@@ -98,6 +102,8 @@ const REGION_ALIAS_GROUPS: string[][] = [
 ];
 
 type AnnouncementSchema = "primary_extended" | "primary" | "legacy";
+// ☑️수정: filter-only 경로가 recommended_desc를 서버에서 직접 받을 수 있게 확장
+type SearchSortBy = "recommended_desc" | "end_date_asc" | "start_date_desc";
 type SupabaseLikeError = { message?: string };
 type FilterConflict = {
   field: "category" | "region" | "target_age";
@@ -296,6 +302,15 @@ function ageWindowMatches(
   return policyMin <= selectedMax && policyMax >= selectedMin;
 }
 
+function agePointMatches(row: Record<string, unknown>, userAge: number | null) {
+  // ☑️수정: 통합검색 final_score와 조건검색 condition_score가 같은 나이 가점 기준을 공유
+  if (userAge === null) return false;
+  const min = toNullableNumber(row.target_age_min);
+  const max = toNullableNumber(row.target_age_max);
+  if (min === null && max === null) return false;
+  return (min === null || min <= userAge) && (max === null || max >= userAge);
+}
+
 function calculateFinalScore(
   row: Record<string, unknown>,
   similarity: number,
@@ -313,19 +328,69 @@ function calculateFinalScore(
 
   // 2. 나이 가중치 (+10): 나이 제한이 없는 일반 공고(NULL)는 제외하고, 
   // 내 나이를 구체적으로 명시하여 타겟팅한 정책에만 부여
-  if (userAge !== null) {
-    const min = toNullableNumber(row.target_age_min);
-    const max = toNullableNumber(row.target_age_max);
-    
-    // min 또는 max 중 하나라도 숫자가 존재하여 나이 범위를 좁혔을 때만 타겟팅으로 인정
-    if (min !== null || max !== null) {
-      if ((min === null || min <= userAge) && (max === null || max >= userAge)) {
-        bonus += 10;
-      }
-    }
+  if (agePointMatches(row, userAge)) {
+    bonus += 10;
   }
 
   return { finalScore: simScore + bonus, matchBonus: bonus };
+}
+
+function categoryPointMatches(row: Record<string, unknown>, filterCategory: string | null) {
+  // ☑️수정: 조건검색 추천순에서 분야 일치만 보수적으로 가산점 처리
+  if (!filterCategory) return false;
+  const category =
+    typeof row.s_category === "string"
+      ? row.s_category
+      : typeof row.category === "string"
+        ? row.category
+        : null;
+  const supportType = typeof row.support_type === "string" ? row.support_type : null;
+  const targetTags = normalizeTargetTags(row.target_tags);
+  return (
+    category === filterCategory ||
+    supportType === filterCategory ||
+    targetTags.includes(filterCategory)
+  );
+}
+
+function calculateConditionScore(
+  row: Record<string, unknown>,
+  filterCategory: string | null,
+  filterRegion: string | null,
+  userAge: number | null,
+  scoreAge: boolean
+) {
+  // ☑️수정: query 없는 조건검색 추천순은 UI 필터 적합도만 점수화
+  let score = 0;
+  if (filterRegion && row.region === filterRegion) {
+    score += CONDITION_REGION_BONUS;
+  }
+  if (categoryPointMatches(row, filterCategory)) {
+    score += CONDITION_CATEGORY_BONUS;
+  }
+  if (scoreAge && agePointMatches(row, userAge)) {
+    score += CONDITION_AGE_BONUS;
+  }
+  return score;
+}
+
+function compareByEndDateAscThenIdAsc(a: Record<string, unknown>, b: Record<string, unknown>) {
+  // ☑️수정: condition_score 동점이면 기존 filter-only 기본값인 마감 가까운 순으로 안정 정렬
+  const endA = typeof a.apply_end_dt === "string" && a.apply_end_dt ? a.apply_end_dt : "9999-12-31";
+  const endB = typeof b.apply_end_dt === "string" && b.apply_end_dt ? b.apply_end_dt : "9999-12-31";
+  if (endA !== endB) return endA.localeCompare(endB);
+
+  const idA = toNullableNumber(a.id) ?? Number.MAX_SAFE_INTEGER;
+  const idB = toNullableNumber(b.id) ?? Number.MAX_SAFE_INTEGER;
+  return idA - idB;
+}
+
+function compareByConditionScoreDescThenEndDateAsc(
+  a: Record<string, unknown> & { condition_score: number },
+  b: Record<string, unknown> & { condition_score: number }
+) {
+  if (a.condition_score !== b.condition_score) return b.condition_score - a.condition_score;
+  return compareByEndDateAscThenIdAsc(a, b);
 }
 
 function compareByFinalScoreDescThenIdAsc(
@@ -413,13 +478,14 @@ function isPrimarySchema(schema: AnnouncementSchema) {
 
 // 첫 화면 모집중 공고용 추가 옵션 (정렬/페이지네이션/모집중 필터)
 type FilterQueryOptions = {
-  sortBy?: "end_date_asc" | "start_date_desc";
+  sortBy?: SearchSortBy;
   offset?: number;
   limit?: number;
   onlyOpen?: boolean;
   hasAgeRange?: boolean;
   ageMin?: number | null;
   ageMax?: number | null;
+  scoreAge?: boolean; // ☑️수정: 명시적인 나이 입력이 있을 때만 condition_score 나이 가점 적용
 };
 
 function buildFilteredAnnouncementsQuery(
@@ -480,9 +546,13 @@ async function searchByFiltersOnly(
 ) {
   // hasMore 판단을 위해 limit+1 개 가져옴 (이후 잘라냄)
   const requestedLimit = options.limit ?? FILTER_ONLY_MATCH_COUNT;
+  const requestedOffset = options.offset ?? 0;
+  const isRecommendedSort = options.sortBy === "recommended_desc";
   const probeOptions: FilterQueryOptions = {
     ...options,
-    limit: requestedLimit + 1,
+    // ☑️수정: 추천순은 condition_score 계산 후 정렬해야 해서 현재 페이지보다 넓게 조회
+    offset: isRecommendedSort ? 0 : requestedOffset,
+    limit: isRecommendedSort ? FILTER_ONLY_MATCH_COUNT : requestedLimit + 1,
   };
 
   let data: unknown[] | null = null;
@@ -515,6 +585,29 @@ async function searchByFiltersOnly(
     filterAgeMin,
     filterAgeMax
   );
+
+  if (isRecommendedSort) {
+    // ☑️수정: filter-only 추천순은 similarity 없이 UI 필터 적합도(condition_score)로 정렬
+    const scored = filtered
+      .map((row) => ({
+        ...row,
+        condition_score: calculateConditionScore(
+          row,
+          filterCategory,
+          filterRegion,
+          userAge,
+          options.scoreAge === true
+        ),
+      }))
+      .sort(compareByConditionScoreDescThenEndDateAsc);
+    const page = scored.slice(requestedOffset, requestedOffset + requestedLimit);
+    return {
+      results: await attachScrapCounts(page.map((row) => ({ ...row, similarity: 0 }))),
+      hasMore: scored.length > requestedOffset + requestedLimit,
+      error: null,
+    };
+  }
+
   const hasMore = filtered.length > requestedLimit;
   const results = filtered.slice(0, requestedLimit).map((row) => ({
     ...normalizeResultRow(row),
@@ -579,10 +672,16 @@ export async function POST(request: NextRequest) {
     const hasAgeRange = "age_min" in body || "age_max" in body;
     const requestAgeMin = hasAgeRange ? toNullableNumber(body.age_min) : userAge;
     const requestAgeMax = hasAgeRange ? toNullableNumber(body.age_max) : userAge;
+    const conditionScoreAge = body.condition_score_age === true; // ☑️수정: 명시 나이 입력만 condition_score 나이 가점으로 인정
 
     // 첫 화면 모집중 공고용 추가 파라미터 (검색어 없을 때만 의미 있음)
-    const sortBy: "end_date_asc" | "start_date_desc" =
-      body.sort_by === "start_date_desc" ? "start_date_desc" : "end_date_asc";
+    // ☑️수정: recommended_desc를 end_date_asc로 접지 않고 filter-only 추천순 분기로 전달
+    const sortBy: SearchSortBy =
+      body.sort_by === "recommended_desc"
+        ? "recommended_desc"
+        : body.sort_by === "start_date_desc"
+          ? "start_date_desc"
+          : "end_date_asc";
     const offset =
       typeof body.offset === "number" && body.offset >= 0 ? body.offset : 0;
     const limit =
@@ -604,6 +703,7 @@ export async function POST(request: NextRequest) {
           hasAgeRange,
           ageMin: requestAgeMin,
           ageMax: requestAgeMax,
+          scoreAge: conditionScoreAge,
         }
       );
 
