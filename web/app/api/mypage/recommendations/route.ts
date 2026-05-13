@@ -135,8 +135,8 @@ function rankProfileMatches(
       const categoryScore = context.category && row.s_category === context.category ? 1 : 0;
       const typeScore =
         context.userType &&
-        (row.target_group?.includes(context.userType) ||
-          row.target_tags?.includes(context.userType))
+          (row.target_group?.includes(context.userType) ||
+            row.target_tags?.includes(context.userType))
           ? 1
           : 0;
       const similarityScore = Number(row.similarity ?? 0);
@@ -359,9 +359,8 @@ export async function GET(request: NextRequest) {
     const warnings: string[] = [];
 
     if (profileReady) {
-      const profileQueryText = `지역: ${region}, 나이: ${age}세, 관심 분야: ${category}.${
-        userType ? ` 사용자 유형: ${userType}.` : ""
-      } 이 조건에 잘 맞는 지원 공고를 추천해주세요.`;
+      const profileQueryText = `지역: ${region}, 나이: ${age}세, 관심 분야: ${category}.${userType ? ` 사용자 유형: ${userType}.` : ""
+        } 이 조건에 잘 맞는 지원 공고를 추천해주세요.`;
       const profileSearch = await findRecommendationMatches(profileQueryText, rpcBaseParams);
       if (profileSearch.warning) warnings.push(`profile: ${profileSearch.warning}`);
 

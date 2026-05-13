@@ -78,6 +78,14 @@ type MainRecommendation = {
   reason?: string;
 };
 type SearchViewTab = "integrated" | "filtered";
+type ChatOverrideProfile = Pick<
+  SavedFilter,
+  "regions" | "categories" | "target_age" | "user_type"
+>;
+type PendingChatOverride = {
+  query: string;
+  profile: ChatOverrideProfile | null;
+};
 
 const CATEGORY_OPTIONS = CATEGORIES;
 const REGION_OPTIONS = REGIONS;
@@ -292,11 +300,40 @@ const CHAT_INPUT_GUIDE =
 
 function isAffirmativeChatReply(value: string) {
   const normalized = value.trim().replace(/\s+/g, "").toLowerCase();
-  // ☑️수정: "네 그럴게요"처럼 자연스러운 확인 답변도 pending_query 승인으로 처리
+  // ☑️수정: "응 그래줘"처럼 짧은 긍정 응답도 override 승인으로 처리
   return (
-    /^(응|네|예|좋아|좋아요|맞아|그렇게|그럴게|그럴게요|진행|찾아줘|yes|y|ok|okay)$/.test(normalized) ||
-    /^(응|네|예).*(그럴게|그렇게|좋아|진행|찾아줘|해줘|맞아)/.test(normalized)
+    /^(응|네|예|그래|그래줘|좋아|좋아요|맞아|그렇게|그렇게해줘|그럴게|그럴게요|진행|찾아줘|yes|y|ok|okay)$/.test(normalized) ||
+    /^(응|네|예|맞아).*(그래|그럴게|그렇게|좋아|진행|찾아줘|해줘|맞아)/.test(normalized)
   );
+}
+
+function normalizeChatOverrideProfile(value: unknown): ChatOverrideProfile | null {
+  if (!value || typeof value !== "object") return null;
+  const profile = value as Partial<ChatOverrideProfile>;
+  return {
+    regions: Array.isArray(profile.regions)
+      ? profile.regions.filter((item): item is string => typeof item === "string")
+      : null,
+    categories: Array.isArray(profile.categories)
+      ? profile.categories.filter((item): item is string => typeof item === "string")
+      : null,
+    target_age:
+      typeof profile.target_age === "number" && Number.isInteger(profile.target_age)
+        ? profile.target_age
+        : null,
+    user_type:
+      typeof profile.user_type === "string" && profile.user_type.trim()
+        ? profile.user_type
+        : null,
+  };
+}
+
+function latestActiveChatResults(messages: ChatMessage[]): SearchResult[] {
+  // ☑️수정: 후속질문 refinement는 현재 active chat의 직전 추천 카드만 참조
+  return [...messages]
+    .reverse()
+    .find((message) => message.role === "assistant" && message.results?.length)
+    ?.results?.slice(0, 10) ?? [];
 }
 
 function buildChatTranscript(messages: ChatMessage[]): string {
@@ -462,7 +499,8 @@ export default function Home() {
   const chatAbortRef = useRef<AbortController | null>(null);
   const autoSaveTimerRef = useRef<number | null>(null);
   const lastSavedTranscriptRef = useRef("");
-  const pendingChatOverrideRef = useRef<string | null>(null);
+  const pendingChatOverrideRef = useRef<PendingChatOverride | null>(null);
+  const activeChatOverrideRef = useRef<ChatOverrideProfile | null>(null);
   const pendingChatPromptHandledRef = useRef(false);
   const filterPanelRef = useRef<HTMLDivElement | null>(null);
   // ☑️수정: 조건검색 탭 진입/초기화 시 같은 조건으로 자동검색이 중복 실행되지 않도록 마지막 키를 기억
@@ -748,6 +786,7 @@ export default function Home() {
     setActiveChatId(null);
     setCurrentSessionId(createClientSessionId());
     pendingChatOverrideRef.current = null;
+    activeChatOverrideRef.current = null;
     setLeaveAction(null);
     await loadOpenAnnouncements(0, "end_date_asc", false);
   }
@@ -830,6 +869,7 @@ export default function Home() {
     setActiveChatId(null);
     setCurrentSessionId(createClientSessionId());
     pendingChatOverrideRef.current = null;
+    activeChatOverrideRef.current = null;
     await loadSession();
   }
 
@@ -1052,6 +1092,7 @@ export default function Home() {
     setActiveChatId(null);
     setCurrentSessionId(createClientSessionId());
     pendingChatOverrideRef.current = null;
+    activeChatOverrideRef.current = null;
     lastSavedTranscriptRef.current = "";
     setLeaveAction(null);
     showToast("새 채팅을 시작했습니다.");
@@ -1072,6 +1113,7 @@ export default function Home() {
     setActiveChatId(chat.id);
     setCurrentSessionId(chat.session_id ?? createClientSessionId());
     pendingChatOverrideRef.current = null;
+    activeChatOverrideRef.current = null;
     lastSavedTranscriptRef.current = chat.content;
     setLeaveAction(null);
     showToast(`"${chat.title ?? "저장된 대화"}"를 불러왔습니다.`);
@@ -1431,12 +1473,69 @@ export default function Home() {
     const trimmed = chatInput.trim();
     if (!trimmed || chatLoading) return;
     const pendingOverride = pendingChatOverrideRef.current;
+    const normalizedReply = trimmed
+      .trim()
+      .replace(/\s+/g, "")
+      .replace(/[!?,.~]/g, "")
+      .toLowerCase();
+    const manualAffirmativeOverride =
+      normalizedReply === "ì›…" ||
+      normalizedReply === "ì‘ê·¸ëž˜ì¤˜" ||
+      normalizedReply === "ì¢‹ì•„ì§„í–‰í•´ì¤˜";
     const confirmedPendingOverride = Boolean(
-      pendingOverride && isAffirmativeChatReply(trimmed)
+      pendingOverride &&
+        (isAffirmativeChatReply(trimmed) || manualAffirmativeOverride)
+    );
+    const rejectedPendingOverride = Boolean(
+      pendingOverride &&
+        /^(ì•„ë‹ˆ|ì•„ë‹ˆì•¼|ì•„ë‹ˆìš”|ë§ê³ |ì·¨ì†Œ|ì·¨ì†Œí•´ì¤˜|ì·¨ì†Œí• ê²Œ|no|n)$/.test(
+          normalizedReply
+        )
+    );
+    // ☑️수정: 인코딩 영향 없이 confirm 승인/거절 판정을 보장하기 위한 우선 판정값
+    void confirmedPendingOverride;
+    void rejectedPendingOverride;
+    const confirmedPendingOverrideNormalized = Boolean(
+      pendingOverride &&
+        (isAffirmativeChatReply(trimmed) ||
+          normalizedReply === "\uc6c5" ||
+          normalizedReply === "\uc751\uadf8\ub798\uc918" ||
+          normalizedReply === "\uc88b\uc544\uc9c4\ud589\ud574\uc918")
+    );
+    const rejectedPendingOverrideNormalized = Boolean(
+      pendingOverride &&
+        [
+          "\uc544\ub2c8",
+          "\uc544\ub2c8\uc57c",
+          "\uc544\ub2c8\uc694",
+          "\ub9d0\uace0",
+          "\ucde8\uc18c",
+          "\ucde8\uc18c\ud574\uc918",
+          "\ucde8\uc18c\ud560\uac8c",
+          "no",
+          "n",
+        ].includes(normalizedReply)
     );
     const userMessage: ChatMessage = { role: "user", content: trimmed };
 
-    if (isLowSignalChatInput(trimmed) && !confirmedPendingOverride) {
+    if (rejectedPendingOverrideNormalized) {
+      // ☑️수정: confirm 거절 응답은 pending override를 해제하고 검색 호출 없이 안내만 반환
+      pendingChatOverrideRef.current = null;
+      setChatMessages((prev) => [
+        ...prev,
+        userMessage,
+        {
+          role: "assistant",
+          content:
+            "알겠습니다. 기존 프로필 기준으로 다시 찾아드릴까요,\n아니면 원하시는 조건을 다시 말씀해주실까요?",
+        },
+      ]);
+      setChatInput("");
+      setChatError(null);
+      return;
+    }
+
+    if (isLowSignalChatInput(trimmed) && !confirmedPendingOverrideNormalized) {
       const guideMessage: ChatMessage = { role: "assistant", content: CHAT_INPUT_GUIDE };
       setChatMessages((prev) => [...prev, userMessage, guideMessage]);
       setChatInput("");
@@ -1457,16 +1556,33 @@ export default function Home() {
     setChatError(null);
 
     try {
-      const messageForApi = confirmedPendingOverride && pendingOverride
-        ? pendingOverride
+      const messageForApi = confirmedPendingOverrideNormalized && pendingOverride
+        ? pendingOverride.query
         : trimmed;
+      const activeOverrideForApi =
+        confirmedPendingOverrideNormalized && pendingOverride?.profile
+          ? pendingOverride.profile
+          : activeChatOverrideRef.current;
+      // ☑️수정: confirm 승인 재실행은 새 검색처럼 history/recent contamination 제거
+      const historyForApi = confirmedPendingOverrideNormalized ? [] : chatMessages.slice(-8);
+      const recentResultsForApi = confirmedPendingOverrideNormalized
+        ? []
+        : latestActiveChatResults(chatMessages);
       const res = await fetch("/api/chat/rag", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: messageForApi,
-          history: chatMessages.slice(-8),
-          confirmed_filter_override: confirmedPendingOverride,
+          history_scope: "active_chat",
+          active_chat_id: activeChatId,
+          session_id: currentSessionId,
+          current_profile: savedFilter,
+          current_login_id: currentUser?.login_id ?? null,
+          // ☑️수정: 승인된 override는 현재 active chat 요청에만 함께 전달
+          active_chat_override: activeOverrideForApi,
+          history: historyForApi,
+          recent_results: recentResultsForApi,
+          confirmed_filter_override: confirmedPendingOverrideNormalized,
         }),
         signal: controller.signal,
       });
@@ -1506,8 +1622,15 @@ export default function Home() {
         data.intent === "confirm_filter_override" &&
         typeof data.pending_query === "string"
       ) {
-        pendingChatOverrideRef.current = data.pending_query;
+        pendingChatOverrideRef.current = {
+          query: data.pending_query,
+          profile: normalizeChatOverrideProfile(data.pending_override_profile),
+        };
       } else {
+        if (confirmedPendingOverrideNormalized && pendingOverride?.profile) {
+          // ☑️수정: 승인된 override 조건은 현재 active chat 안에서 후속질문 기본값으로 유지
+          activeChatOverrideRef.current = pendingOverride.profile;
+        }
         pendingChatOverrideRef.current = null;
       }
       setChatMessages((prev) => [...prev, reply]);
