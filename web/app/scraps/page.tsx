@@ -167,9 +167,10 @@ export default function ScrapsPage() {
             <section>
               <div className="mb-4">
                 <p className="text-sm font-semibold text-blue-600">스크랩</p>
-                <h1 className="mt-1 text-2xl font-bold">스크랩 기반 추천 공고</h1>
+                {/* ☑️수정: 추천 근거를 스크랩으로만 단정하지 않도록 섹션명 완화 */}
+                <h1 className="mt-1 text-2xl font-bold">맞춤 추천 공고</h1>
                 <p className="mt-2 text-sm text-slate-500">
-                  최근 저장한 정책과 비슷한 공고예요.
+                  내 관심 이력을 참고한 추천 공고예요
                 </p>
               </div>
               <div className="grid gap-4 md:grid-cols-3">
@@ -230,8 +231,9 @@ function RecommendationCard({ item }: { item: Recommendation }) {
       className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm hover:border-blue-200 hover:shadow-md"
     >
       <div className="mb-4 flex gap-1.5">
+        {/* ☑️수정: 실제 진행 상태처럼 보이는 고정 문구 대신 중립 추천 배지로 표시 */}
         <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">
-          진행중
+          추천
         </span>
         {item.s_category && (
           <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-700">

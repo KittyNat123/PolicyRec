@@ -454,7 +454,7 @@ const DEMO_POPULAR_KEYWORDS = [
 ];
 
 // ☑️수정: 문장형 질의도 통합검색 입력/검색 흐름으로 보여주기 위한 데모 버튼 문구
-const DEMO_SENTENCE_QUERY = "전세사기 피해 지원받을 수 있을까";
+const DEMO_SENTENCE_QUERY = "부산에서 전세피해 지원받을 수 있을까";
 
 export default function Home() {
   const [query, setQuery] = useState("");
@@ -1503,37 +1503,37 @@ export default function Home() {
       normalizedReply === "ì¢‹ì•„ì§„í–‰í•´ì¤˜";
     const confirmedPendingOverride = Boolean(
       pendingOverride &&
-        (isAffirmativeChatReply(trimmed) || manualAffirmativeOverride)
+      (isAffirmativeChatReply(trimmed) || manualAffirmativeOverride)
     );
     const rejectedPendingOverride = Boolean(
       pendingOverride &&
-        /^(ì•„ë‹ˆ|ì•„ë‹ˆì•¼|ì•„ë‹ˆìš”|ë§ê³ |ì·¨ì†Œ|ì·¨ì†Œí•´ì¤˜|ì·¨ì†Œí• ê²Œ|no|n)$/.test(
-          normalizedReply
-        )
+      /^(ì•„ë‹ˆ|ì•„ë‹ˆì•¼|ì•„ë‹ˆìš”|ë§ê³ |ì·¨ì†Œ|ì·¨ì†Œí•´ì¤˜|ì·¨ì†Œí• ê²Œ|no|n)$/.test(
+        normalizedReply
+      )
     );
     // ☑️수정: 인코딩 영향 없이 confirm 승인/거절 판정을 보장하기 위한 우선 판정값
     void confirmedPendingOverride;
     void rejectedPendingOverride;
     const confirmedPendingOverrideNormalized = Boolean(
       pendingOverride &&
-        (isAffirmativeChatReply(trimmed) ||
-          normalizedReply === "\uc6c5" ||
-          normalizedReply === "\uc751\uadf8\ub798\uc918" ||
-          normalizedReply === "\uc88b\uc544\uc9c4\ud589\ud574\uc918")
+      (isAffirmativeChatReply(trimmed) ||
+        normalizedReply === "\uc6c5" ||
+        normalizedReply === "\uc751\uadf8\ub798\uc918" ||
+        normalizedReply === "\uc88b\uc544\uc9c4\ud589\ud574\uc918")
     );
     const rejectedPendingOverrideNormalized = Boolean(
       pendingOverride &&
-        [
-          "\uc544\ub2c8",
-          "\uc544\ub2c8\uc57c",
-          "\uc544\ub2c8\uc694",
-          "\ub9d0\uace0",
-          "\ucde8\uc18c",
-          "\ucde8\uc18c\ud574\uc918",
-          "\ucde8\uc18c\ud560\uac8c",
-          "no",
-          "n",
-        ].includes(normalizedReply)
+      [
+        "\uc544\ub2c8",
+        "\uc544\ub2c8\uc57c",
+        "\uc544\ub2c8\uc694",
+        "\ub9d0\uace0",
+        "\ucde8\uc18c",
+        "\ucde8\uc18c\ud574\uc918",
+        "\ucde8\uc18c\ud560\uac8c",
+        "no",
+        "n",
+      ].includes(normalizedReply)
     );
     const userMessage: ChatMessage = { role: "user", content: trimmed };
 
@@ -1722,11 +1722,12 @@ export default function Home() {
     !showScrappedOnly &&
     results.length > 0 &&
     (hasSearchQueryForRecommendation || hasFilterForRecommendation);
+  // ☑️수정: 추천순 설명이 실제 로직보다 지역/분야/나이 추출 반영을 과장하지 않도록 문구 보정
   const recommendedSortTitle =
     activeSearchTab === "filtered"
-      ? "선택한 필터를 우선 적용하고, 필터 조건과 의미적으로 가까운 공고를 추천순으로 보여드려요."
+      ? "선택한 조건과 잘 맞는 공고를 먼저 보여드려요."
       : hasSearchQueryForRecommendation
-        ? "검색어 의미와 검색어에서 읽어낸 지역/분야/나이 조건을 반영한 추천 순서예요."
+        ? "검색어 기준으로 관련이 높은 공고를 먼저 보여드려요."
         : "지금 신청 가능한 공고를 기본 추천순으로 보여드려요.";
   const loadingMessage =
     sortBy === "recommended_desc"
@@ -1839,7 +1840,8 @@ export default function Home() {
                       )
                     ) : (
                       <p className="mt-2 max-w-xl text-sm leading-6 text-slate-600">
-                        지역, 나이, 관심 분야와 스크랩 이력을 바탕으로 추천할 만한 공고를 카드로 보여드려요.
+                        {/* ☑️수정: AI 추천이 프로필과 스크랩을 항상 모두 쓰는 것처럼 보이지 않도록 완화 */}
+                        저장한 프로필 조건 또는 스크랩 이력을 바탕으로 추천합니다.
                       </p>
                     )}
                   </div>
