@@ -52,7 +52,100 @@
 - scraps : 사용자 관심 공고 저장. (맞춤 공고 추천에 사용)
 - chat_history : 사용자의 챗봇 대화 이력 저장. 
 
----
-## [추가적으로 시각화하면 좋을만한 자료 - 추가예정]
-- 간단한 db 도식화 
-- [전체 흐름도]api 수집 -> db적재 -> rag -> 화면구현 순서도
+-----
+
+## [추가적으로 시각화하면 좋을만한 자료]
+- 간단한 db 도식화 : 혹시 몰라 ERD_simple.png 만들긴 했는데 erd까지 안 담고 테이블명만 있어도 충분할 것 같아요! 나머지 erd도 최신화해뒀습니다.
+- [전체 흐름도]api 수집 -> db적재 -> rag -> 화면구현 순서도 : 한장으로 시도했는데 잘 안되어서 두개 영역으로 분리했습니다.
+   >1. Ingestion Layer (데이터 수집 및 적재 로직) 
+   >2. Inference & Search Layer (서비스 로직)
+
+   >- 로직이 통합검색/조건검색/챗봇/맞춤정보 다 조금씩 달라서 지금처럼 만들었어요 mermaid 기반으로 이미지 파일 생성했는데 디자인 한계가 있네요. 다시 만드실 때 아래 mermaid 소스 가져다 만들면 오타없이 생성해주더라구요..!
+   >- 파이프라인_1번로직_데이터 수집 및 적재.png, 파이프라인_2번로직_서비스로직.png 참고해주세요
+
+----
+
+```mermaid
+flowchart LR
+    subgraph Source["Data Source"]
+        API["외부 API 데이터 수집<br/>(온통청년, 기업마당, <br/>K-Startup)"]
+    end
+
+    subgraph Pipeline["Data Ingestion Pipeline"]
+        direction LR
+        ETL["데이터 정제 및 표준화<br/>(공통 스키마 추출, <br/>포맷 변환)"] --> EMB["6개 핵심 컬럼 조합 임베딩 <br/>(model :<br/> Gemini-embedding-001)"]
+    end
+
+    subgraph Storage["Core Storage"]
+        DB[("Vector DB<br/>(Supabase)")]
+    end
+
+    API --> ETL
+    EMB --> DB
+
+    %% Style
+    style Source fill:#f9f9f9,stroke:#333
+    style Pipeline fill:#e8f5e9,stroke:#2e7d32
+    style Storage fill:#fff3e0,stroke:#e65100,stroke-width:2px
+```
+
+
+```mermaid
+flowchart TB
+    %% 사용자의 다양한 요청
+    subgraph Inputs["User Requests (사용자 요청)"]
+        direction LR
+        I1["<b>통합검색 / 추천</b><br/>(자연어 질문/맞춤추천)"]
+        I2["<b>조건검색</b><br/>(지역/분야/나이 등 선택)"]
+        I3["<b>AI 챗봇</b><br/>(상담/가이드 질문)"]
+    end
+
+    %% 실제 처리 로직 분기
+    subgraph Processing["Service Logic (처리 로직)"]
+        direction TB
+
+        %% AI 기반 (통합/추천/챗봇)
+        subgraph Semantic["AI & Semantic Path"]
+            direction LR
+            Embed["Gemini Embedding"] --> Hybrid["Hybrid Search<br/>(Vector + SQL)"]
+        end
+
+        %% DB 기반 (조건검색 전용)
+        subgraph Exact["Exact Match Path"]
+            direction LR
+            DB_Filter["DB Hard Filtering<br/>(Only SQL)"]
+        end
+
+        %% 공고 재정렬 (전 기능 공통)
+        Rerank["<b>Reranking</b><br/>(가중치 부여,<br/>맞춤형 검색결과 출력)"]
+    end
+
+    %% 최종 결과물
+    subgraph Outputs["Final Outputs"]
+        direction LR
+        Cards["공고 카드 리스트<br/>(검색/조건/추천)"]
+        RAG["Gemini 1.5 Flash<br/>(챗봇 답변 생성)"]
+    end
+
+    %% 연결 관계
+    I1 --> Embed
+    I3 --> Embed
+    I2 --> DB_Filter
+    
+    Hybrid --> Rerank
+    DB_Filter --> Rerank
+    
+    Rerank --> Cards
+    Rerank --> RAG
+
+    %% 외부 DB 연결 표현
+    DB_CORE[("Vector DB<br>(Supabase)")] -.-> Hybrid
+    DB_CORE -.-> DB_Filter
+
+    %% Style
+    style Inputs fill:#f9f9f9,stroke:#333
+    style Processing fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    style Semantic fill:#e8f5e9,stroke:#2e7d32
+    style Exact fill:#fff3e0,stroke:#e65100
+    style Outputs fill:#f3e5f5,stroke:#7b1fa2
+```
