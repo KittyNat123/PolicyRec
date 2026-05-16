@@ -1,43 +1,48 @@
-# PolicyRec current runtime requirements
+# PolicyRec Python 의존성 (데이터 파이프라인 / 노트북용)
 #
 # Scope:
-# - raw API collection / normalization notebooks
-# - Streamlit prototype apps
-# - Gemini-based chatbot / embedding experiments
-# - Supabase RAG load and retrieval notebooks
+# - app/collectors: BizInfo / K-Startup / YouthCenter API 수집
+# - app/norm.py: 정규화 함수
+# - scripts/fetch.py: yml 자동 수집 진입점
+# - PolicyRec_v1_1_12.ipynb: 정제 노트북 (메인)
+# - policyRec_v1_2_3.ipynb: Supabase 임베딩 적재 노트북
+#
+# Note: Next.js 웹 앱 의존성은 web/package.json에 분리되어 있습니다.
 
-# Core data handling
+# === Core 데이터 처리 ===
+# 정제 노트북(v1.1.8~12) + 적재 노트북(v1.2.3)에서 사용
 pandas
 numpy
+
+# === API 수집 ===
+# app/collectors, scripts/fetch.py, v1.2.3 노트북에서 사용
 requests
 python-dotenv
 
-# Streamlit prototype web apps
-streamlit
-
-# Local TF-IDF / similarity search
-scikit-learn
-
-# Notebook runtime
+# === Jupyter Notebook 실행 ===
+# 노트북 작성/실행 및 yml 자동 실행(nbconvert)에 필요
 ipykernel
 IPython
+jupyter
+nbconvert
 
-# Gemini SDKs
-# streamlit_app2.py uses `from google import genai`
-google-genai
-# v1.2 notebooks use `import google.generativeai as genai`
+# === Gemini SDK (임베딩 생성) ===
+# v1.2.3 적재 노트북에서 `from google import genai` 형태로 사용
 google-generativeai
 
-# Supabase / pgvector pipeline
+# === Supabase 적재 ===
+# v1.2.3 적재 노트북에서 사용
 supabase
 
-# HTML cleanup / parsing used in v1.2 pipeline notebooks
+# === HTML 정리 ===
+# app 수집/정규화 모듈에서 원본 HTML 태그 제거에 사용
+# (노트북에는 직접 import 없으나 수집 단계에서 필요)
 beautifulsoup4
 
-# Spreadsheet / document helpers referenced in project workflow
+# === 설정 파일 처리 ===
+PyYAML
+
+# === 문서 / 스프레드시트 보조 (워크플로우 참조용) ===
 openpyxl
 pypdf
 python-docx
-
-# Optional config/data helpers seen in notebooks
-PyYAML

@@ -11,6 +11,130 @@ PolicyRec — 청년지원사업 통합 추천 AI 프로젝트의 변경 이력.
 
 ---
 
+## [Unreleased / MVP 운영] - 2026-05
+
+### Added
+- **Next.js 웹 앱** (`web/`) — 검색·추천·챗봇 UI MVP 완료
+  - 통합검색 (자연어, Gemini 셀프쿼리 필터 추출)
+  - 조건검색 (지역·분야·나이 필터 + condition_score 가중치 정렬)
+  - 정렬 (추천순 / 마감순 / 신규순)
+  - 스크랩 (저장 / 분야별 조회 / 마감 임박순)
+  - AI 맞춤 추천 (프로필 기반 + 스크랩 기반)
+  - RAG 챗봇 (대화 맥락 유지, confirm 흐름, 신청 가이드)
+  - 관리자 read-only 대시보드 (공고 현황 / 사용자 통계 / 공고 조회)
+- **GitHub Actions 자동 수집** (`.github/workflows/weekly_collect.yml`)
+  - 매주 수요일 06:00 KST(화 21:00 UTC) 자동 실행
+  - BizInfo / K-Startup / YouthCenter API 자동 호출 → 정규화 → main CSV 생성 → git commit
+- **Supabase RPC 추가** (`Database/RPC_retrieve_only_announcements.sql`)
+  - 메타데이터 필터 없이 의미 유사도 only 검색용 RPC
+
+### Changed
+- 챗봇 신청 가이드 보강 — 공고명이 포함된 질문에서 실제 공고 매칭 안정화
+- 챗봇 history 로직 — 다른 채팅방 컨텍스트 오염 방지를 위해 history 참조 범위 축소
+- 조건검색 추천순 가중치 — 지역 30 / 분야 20 / 나이 10 (대상·상태는 0)
+- 통합검색 정렬 보강 — 검색어 있는 마감순/신규순도 서버에서 후보 50개 확보 후 정렬 (로컬 버전)
+
+---
+
+## [1.1.12] - 2026-05-12
+
+### Added
+- **region 보정 강화** (v1.1.11 위)
+  - 제목의 bracket(예: `[서울]`)과 도시명 기반 region 추가 보정
+- 565건 / 29컬럼
+
+### 산출물
+- 노트북: `PolicyRec_v1_1_12.ipynb`
+- CSV: `data/csv/main/main_v1_1_12.csv` (565건, 29컬럼)
+
+---
+
+## [1.1.11] - 2026-05-08
+
+### Added
+- **데이터 품질 보강** (v1.1.10 위)
+  - `target_tags_rule` 13개 추가 → 커버리지 100% 달성 (총 46개 룰)
+  - `detail_url` 보정: youth NULL → source_id 기반 URL 생성, http 미시작 → `https://` 추가
+  - `s_category` 기타 3건 → 올바른 카테고리 재분류
+
+### 산출물
+- 노트북: `PolicyRec_v1_1_11.ipynb`
+- CSV: `data/csv/main/main_v1_1_11.csv`
+
+---
+
+## [1.1.10] - 2026-05-05
+
+### Changed
+- 룰표 파일명 패턴 정리
+- `target_tags_rule.csv`, `region_sub_rule.csv` 보강
+
+### 산출물
+- 노트북: `PolicyRec_v1_1_10.ipynb`
+- CSV: `data/csv/main/main_v1_1_10.csv`
+
+---
+
+## [1.1.9] - 2026-05-03
+
+### Added
+- **region 정규화 신규** (v1.1.8 위)
+  - `region_rule.csv` 룰표 도입
+  - raw 단계에서 부처명/기관명이 region에 혼입되던 문제 해결
+    - 예: `중소벤처기업부` 23건, `제주특별자치도경제통상진흥원 경영본부 청년센터` 77건 → 정리
+  - 시도 alias 통일 (`서울` → `서울특별시` 등 긴 공식 표기)
+- `target_tags` 컬럼 신규 (11종 태그)
+  - `target_tags_rule.csv` 룰표 도입
+
+### Changed
+- 룰표 파일명 패턴 분리
+  - cat/scope 룰표: 노트북 버전 따라감 (`cat_rule_v1_1_X.csv`)
+  - region/target_tags 룰표: 단일 파일 (룰 변경 시에만 버전 업)
+
+### 산출물
+- 노트북: `PolicyRec_v1_1_9.ipynb`
+- CSV: `data/csv/main/main_v1_1_9.csv`
+
+---
+
+## [1.1.8] - 2026-04-30
+
+### Added
+- **룰표 v2 적용 + dedupe + 임베딩 준비**
+- 새로운 raw 데이터 수집 (`raw_v1_1_8.csv`, 600건)
+- 카테고리 룰표 v2 (civic 처리 보강 + 위험 키워드 제거)
+- 스코프 룰표 v2 (priority 적용)
+- dedupe 자동 처리:
+  - URL exact match → `duplicate_url`
+  - 제목+기관+기간 100% 일치 → `duplicate_exact`
+  - 자매 공고 → review 큐로 분리
+
+### Changed
+- v1 대비 v2 룰표 주요 변경점
+  - civic 처리: 키워드 8개 → 카테고리 룰 + 보강 키워드 5개
+  - 위험 키워드: 경진대회/박람회/페스티벌/서포터즈 → **모두 제거** (창업지원사업 main 유지)
+  - 중복 카테고리: youth `참여･기반,참여･기반` 등 자동 처리
+
+### 산출물
+- 노트북: `PolicyRec_v1_1_8.ipynb`
+- raw CSV: `data/csv/raw/raw_v1_1_8.csv`
+
+---
+
+## [1.2.x] - 2026-04 ~ 2026-05
+
+### Added
+- **Supabase 적재 파이프라인** (담당: 김보미)
+  - Gemini 임베딩 생성 → Supabase `announcements` 테이블 적재
+  - 임베딩 입력 텍스트: title + summary + region + category 등 핵심 필드 결합
+- **Hybrid Search RPC** (`Database/RPC_match_announcements_hybrid_v1.sql`)
+  - 필터 조건 + 벡터 유사도 결합 검색
+- **DB 스키마 정의**
+  - `announcements`, `user_info`, `scraps`, `chat_history` 등
+  - ERD 문서화 (`Database/ERD_table_info_v1.md`)
+
+---
+
 ## [1.1.6] - 2026-04-28
 
 ### Added
@@ -185,9 +309,14 @@ v1.1    : 13컬럼 (source, source_id, title, summary, category, benefit_type,
 v1.1.1  : 14컬럼 (-benefit_type, +provider, +region_code)
 v1.1.2  : 13컬럼 (-region_code)
 v1.1.3  : 13컬럼 (스키마 변경 없음, region/category 값 정규화 핫픽스)
-v1.1.4  : 25컬럼 — +s_category, +_scope, +norm_*, +_dedupe_key / 컬럼에 raw_ 접두어 임시 부여 / 568건
-v1.1.5  : 26컬럼 — raw_ 접두어 전면 제거, raw_period_text 삭제 / 554건
-v1.1.6  : 28컬럼 — +target_age_min, +target_age_max (Int64 nullable) / 554건  ← 현재
+v1.1.4  : 25컬럼 — +s_category, +_scope, +norm_*, +_dedupe_key / raw_ 접두어 임시 / 568건
+v1.1.5  : 26컬럼 — raw_ 접두어 전면 제거 / 554건
+v1.1.6  : 28컬럼 — +target_age_min, +target_age_max (Int64 nullable) / 554건
+v1.1.8  : 28컬럼 — 룰표 v2 + dedupe 자동화 / raw 600건
+v1.1.9  : 29컬럼 — +target_tags / region_rule.csv 도입
+v1.1.10 : 29컬럼 — 룰표 정리
+v1.1.11 : 29컬럼 — target_tags 100% 커버리지 / detail_url 보정
+v1.1.12 : 29컬럼 / 565건 ← 현재 (region 보정 강화)
 ```
 
 ---
@@ -206,12 +335,16 @@ v1.1.6  : 28컬럼 — +target_age_min, +target_age_max (Int64 nullable) / 554�
 | 6 | Youth target_group 결측 | summary 자연어에서 대상 정보 추출 | API 구조적 한계 / LLM 추출 필요 (v1.4) |
 | 7 | Summary 구조화 정보 추출 | `plcySprtCn` 자연어에서 "대상: 18~40세" 등 구조화 | RAG 품질 향상 및 필터 확장 (v1.4) |
 | 8 | ~~**category 체계 통일**~~ | ~~**source별로 다른 분류 축을 공통 택소노미로 재편**~~ | **v1.1.4 해결** — `s_category` + cat_rule 룰표로 통합 |
+| 9 | api_batch_logs DB 기록 | 자동 수집 yml 끝에 DB INSERT 단계 추가 | 관리자 대시보드 수집 로그 시각화용 |
+| 10 | Supabase 자동 적재 | yml에 임베딩 생성 + DB upsert 단계 추가 | 현재는 수동으로 노트북 실행 |
+| 11 | 대상 필터 hard filter | 대상 태그를 표준 토큰으로 정규화하여 hard filter 컬럼 추가 | UI 대상 필터 정확도 향상 |
+| 12 | 저장 대화 의미 검색 | `chat_history` 임베딩 저장 후 의미 검색 활용 | 챗봇 장기 기억 |
 
 ---
 
 ## 📋 로드맵
 
-- **v1.2.x** — Supabase + Gemini 임베딩 적재 파이프라인 (진행 중)
-- **v1.3** — Hybrid Search 검증 (SQL 하드 필터 + 벡터 유사도 결합)
+- **현재**: MVP 운영 (검색 + 추천 + 챗봇 + 자동 수집)
 - **v1.4** — LLM 기반 `target_tags` 추출 + 추천 이유 자연어 생성
 - **v2.0** — 첨부파일 PDF/HWP 본문 RAG 확장
+- **Future** — Supabase 자동 적재 파이프라인, 신청 추적, 알림 발송, 사용자 행동 분석
