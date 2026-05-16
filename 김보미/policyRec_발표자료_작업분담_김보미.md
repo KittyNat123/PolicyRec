@@ -54,7 +54,11 @@
 
 -----
 
-## [추가적으로 시각화하면 좋을만한 자료]
+# 아래 도식 수정했어요!!(글자 안보이던 것 수정, 2번 서비스 로직 수정)
+- 이미지도 수정했어요. 이게 최선이에요ㅜㅜ 제가 드린 자료를 꼭 다 사용하지 않으셔도 된 골라서 써주세요!
+- 로직, 이미지 둘 다 맞는지 확인하시고 로직 변경하셔도 됩니다!! (변경요청하셔도 좋습니다! 주말에 작업가능해요!)
+
+## [추가적으로 시각화하면 좋을만한 자료]  
 - 간단한 db 도식화 : 혹시 몰라 ERD_simple.png 만들긴 했는데 erd까지 안 담고 테이블명만 있어도 충분할 것 같아요! 나머지 erd도 최신화해뒀습니다.
 - [전체 흐름도]api 수집 -> db적재 -> rag -> 화면구현 순서도 : 한장으로 시도했는데 잘 안되어서 두개 영역으로 분리했습니다.
    >1. Ingestion Layer (데이터 수집 및 적재 로직) 
@@ -67,33 +71,39 @@
 
 ```mermaid
 flowchart LR
-    subgraph Source["Data Source"]
-        API["외부 API 데이터 수집<br/>(온통청년, 기업마당, <br/>K-Startup)"]
+    %% 1. 외부 데이터 수집 구역
+    subgraph Source["<font color='black'><b>1. 데이터 수집</b></font>"]
+        direction TB
+        API["외부 API 데이터 수집<br/>(온통청년, 기업마당, K-Startup)"]
     end
 
-    subgraph Pipeline["Data Ingestion Pipeline"]
+    %% 2. 전처리 및 임베딩 파이프라인
+    subgraph Pipeline["<font color='black'><b>2. 전처리 및 적재</b></font>"]
         direction LR
-        ETL["데이터 정제 및 표준화<br/>(공통 스키마 추출, <br/>포맷 변환)"] --> EMB["6개 핵심 컬럼 조합 임베딩 <br/>(model :<br/> Gemini-embedding-001)"]
+        ETL["데이터 정제 및 표준화<br/>(공통 스키마 추출 및 가공)"] --> EMB["핵심 컬럼 조합 임베딩<br/>(Gemini-embedding-001)"]
     end
 
-    subgraph Storage["Core Storage"]
+    %% 3. 최종 저장소
+    subgraph Storage["<font color='black'><b>3. 데이터 저장</b></font>"]
+        direction TB
         DB[("Vector DB<br/>(Supabase)")]
     end
 
+    %% 연결 관계
     API --> ETL
     EMB --> DB
 
-    %% Style
-    style Source fill:#f9f9f9,stroke:#333
-    style Pipeline fill:#e8f5e9,stroke:#2e7d32
+    %% --- 스타일 설정 ---
+    style Source fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style Pipeline fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
     style Storage fill:#fff3e0,stroke:#e65100,stroke-width:2px
-```
 
+```
 
 ```mermaid
 flowchart TB
     %% 사용자의 다양한 요청
-    subgraph Inputs["User Requests (사용자 요청)"]
+    subgraph Inputs["<font color='black'><b>1. 사용자 요청</b></font>"]
         direction LR
         I1["<b>통합검색 / 추천</b><br/>(자연어 질문/맞춤추천)"]
         I2["<b>조건검색</b><br/>(지역/분야/나이 등 선택)"]
@@ -101,19 +111,19 @@ flowchart TB
     end
 
     %% 실제 처리 로직 분기
-    subgraph Processing["Service Logic (처리 로직)"]
+    subgraph Processing["<font color='black'><b>2. 서비스 로직</b></font>"]
         direction TB
 
         %% AI 기반 (통합/추천/챗봇)
-        subgraph Semantic["AI & Semantic Path"]
+        subgraph Semantic["<font color='black'><b>Semantic Retriever<br/> (의미 기반 검색)</b></font>"]
             direction LR
-            Embed["Gemini Embedding"] --> Hybrid["Hybrid Search<br/>(Vector + SQL)"]
+            Embed["Gemini Embedding"] --> Hybrid["벡터 유사도 비교<br/>+ 상세 조건 필터링"]
         end
 
         %% DB 기반 (조건검색 전용)
-        subgraph Exact["Exact Match Path"]
+        subgraph Exact["<font color='black'><b>항목 기반 검색</b></font>"]
             direction LR
-            DB_Filter["DB Hard Filtering<br/>(Only SQL)"]
+            DB_Filter["상세 조건 필터링<br/>(Metadata Filter)"]
         end
 
         %% 공고 재정렬 (전 기능 공통)
@@ -121,7 +131,7 @@ flowchart TB
     end
 
     %% 최종 결과물
-    subgraph Outputs["Final Outputs"]
+    subgraph Outputs["<font color='black'><b>3. 최종 출력</b></font>"]
         direction LR
         Cards["공고 카드 리스트<br/>(검색/조건/추천)"]
         RAG["Gemini 1.5 Flash<br/>(챗봇 답변 생성)"]
@@ -142,10 +152,36 @@ flowchart TB
     DB_CORE[("Vector DB<br>(Supabase)")] -.-> Hybrid
     DB_CORE -.-> DB_Filter
 
-    %% Style
-    style Inputs fill:#f9f9f9,stroke:#333
-    style Processing fill:#e1f5fe,stroke:#01579b,stroke-width:2px
-    style Semantic fill:#e8f5e9,stroke:#2e7d32
-    style Exact fill:#fff3e0,stroke:#e65100
-    style Outputs fill:#f3e5f5,stroke:#7b1fa2
+    %% --- Style Settings (제목이 검정색으로 잘 보이도록 배경색 최적화) ---
+    style Inputs fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style Processing fill:#f0f7ff,stroke:#01579b,stroke-width:2px
+    style Semantic fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    style Exact fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    style Outputs fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+
+
 ```
+
+>** RAG와 리트리버의 범위를 정확히 찾다보니 저희 시스템은 이런 상황이라고하네요..!(참고)
+
+>RAG : (Retrieval Augmented Generation) : 검색 증강 생성
+
+>엄밀하게는 "마지막 생성(Generation) 단계에 LLM이 있어야 RAG" - 우리 서비스 챗봇은 가장 일반적인 형태의 RAG를 사용한 사례.
+
+>하지만 실무에서는 retrieval-only도 RAG 파이프라인 일부로 부르는 경우가 있음 - 현재 통합검색 로직은 (엄밀히는) 리트리버를 사용한 시맨틱 검색.
+
+----
+
+## [참고] Technology Stack (ai가 이렇게 알려주는데 혹시 기술스택 넣으시려면 수정해서 사용해주세요~)
+
+| 영역 | 기술 / 프레임워크 | 비고 |
+|:---:|:---|:---|
+| **Frontend** | Next.js 16 (App Router), React 19 | 최신 프레임워크 기반의 웹 구현 |
+| **UI / Styling** | Tailwind CSS 4, Lucide React | 유연하고 현대적인 디자인 시스템 적용 |
+| **Backend** | Next.js API Routes (Serverless) | 별도의 서버 구축 없이 프론트엔드와 동시에 API 구현 가능 |
+| **AI (LLM)** | Google Gemini 1.5 Flash | 맥락 기반 응답 및 RAG 기반 답변 생성 |
+| **AI (Vector Embedding)** | Gemini Embedding-001 |  |
+| **Database** | Supabase (PostgreSQL+pgvector) | 클라우드 기반 RDBMS(메타데이터+벡터데이터 모두 처리 가능) |
+| **DevOps** | Vercel, GitHub | 형상관리 및 웹 서비스 배포 |
+
+
