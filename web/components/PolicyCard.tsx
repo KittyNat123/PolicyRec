@@ -18,6 +18,33 @@ function hasText(value: string | null | undefined) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+const HIDDEN_DETAIL_VALUE_LIST = [
+  "",
+  "-",
+  "없음",
+  "정보 없음",
+  "정보없음",
+  "해당 없음",
+  "해당없음",
+  "공고 본문에서 확인해 주세요",
+  "공고를 확인하세요",
+  "원문 공고 확인",
+  "공고문 확인 필요",
+  "연령 확인 필요",
+];
+const HIDDEN_DETAIL_VALUES = new Set(HIDDEN_DETAIL_VALUE_LIST);
+const HIDDEN_DETAIL_VALUE_KEYS = new Set(
+  HIDDEN_DETAIL_VALUE_LIST.map((value) => value.replace(/\s/g, ""))
+);
+
+function hasMeaningfulDetail(value: string | null | undefined) {
+  if (typeof value !== "string") return false;
+  const normalized = value.trim();
+  const compact = normalized.replace(/\s/g, "");
+  // ☑️수정: 상세 영역에서는 비어 있거나 안내용 기본 문구만 있는 항목을 숨김
+  return Boolean(normalized) && !HIDDEN_DETAIL_VALUES.has(normalized) && !HIDDEN_DETAIL_VALUE_KEYS.has(compact);
+}
+
 function isYouthPolicy(item: SearchResult) {
   return item.source?.toLowerCase() === "youth";
 }
@@ -91,6 +118,13 @@ export function PolicyCard({
     item.target_age_min,
     item.target_age_max
   );
+  const showSummaryDetail = hasMeaningfulDetail(summary);
+  const showApplicationMethod = hasMeaningfulDetail(applicationMethod);
+  const showRequiredDocuments = hasMeaningfulDetail(requiredDocuments);
+  const showAdditionalConditions = hasMeaningfulDetail(additionalConditions);
+  const showTargetAge = hasMeaningfulDetail(targetAgeLabel);
+  const showTargetGroup = hasMeaningfulDetail(targetGroup);
+  const showProviderDetail = hasMeaningfulDetail(provider);
   const similarityLabel =
     item.similarity > 0
       ? `유사도 ${Math.round(item.similarity * 100)}%`
@@ -110,7 +144,18 @@ export function PolicyCard({
     item.support_type,
     ...(item.target_tags?.slice(0, 3).map((tag) => `#${tag}`) ?? []),
   ].filter((tag): tag is string => hasText(tag));
-  const hasTargetTags = Boolean(item.target_tags?.length);
+  // ☑️수정: 상세 대상 태그도 의미 있는 값만 노출
+  const detailTargetTags = item.target_tags?.filter(hasMeaningfulDetail) ?? [];
+  const hasTargetTags = detailTargetTags.length > 0;
+  const hasExpandedDetails =
+    showSummaryDetail ||
+    showApplicationMethod ||
+    showRequiredDocuments ||
+    showAdditionalConditions ||
+    showProviderDetail ||
+    showTargetAge ||
+    showTargetGroup ||
+    hasTargetTags;
   const supportSummary =
     item.support_type || additionalConditions || summary || "요약 정보 없음";
 
@@ -224,34 +269,36 @@ export function PolicyCard({
             공고 보기
           </a>
         )}
-        <button
-          type="button"
-          onClick={() => setExpanded((value) => !value)}
-          aria-expanded={expanded}
-          className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50"
-        >
-          {expanded ? "접기" : "더보기"}
-        </button>
+        {hasExpandedDetails && (
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            aria-expanded={expanded}
+            className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50"
+          >
+            {expanded ? "접기" : "더보기"}
+          </button>
+        )}
       </div>
 
-      {expanded && (
+      {expanded && hasExpandedDetails && (
         <dl className="mt-4 space-y-3 rounded-md bg-slate-50 p-4">
-          {summary && <DetailRow label="요약">{summary}</DetailRow>}
-          <DetailRow label="신청 방법">
-            {applicationMethod ?? "공고 본문에서 확인해 주세요"}
-          </DetailRow>
-          <DetailRow label="제출 서류">
-            {requiredDocuments ?? "공고 본문에서 확인해 주세요"}
-          </DetailRow>
-          {additionalConditions && (
+          {showSummaryDetail && <DetailRow label="요약">{summary}</DetailRow>}
+          {showApplicationMethod && (
+            <DetailRow label="신청 방법">{applicationMethod}</DetailRow>
+          )}
+          {showRequiredDocuments && (
+            <DetailRow label="제출 서류">{requiredDocuments}</DetailRow>
+          )}
+          {showAdditionalConditions && (
             <DetailRow label="추가 조건">{additionalConditions}</DetailRow>
           )}
-          {provider && <DetailRow label="제공 기관">{provider}</DetailRow>}
-          <DetailRow label="연령 조건">{targetAgeLabel}</DetailRow>
-          {targetGroup && <DetailRow label="대상">{targetGroup}</DetailRow>}
+          {showProviderDetail && <DetailRow label="제공 기관">{provider}</DetailRow>}
+          {showTargetAge && <DetailRow label="연령 조건">{targetAgeLabel}</DetailRow>}
+          {showTargetGroup && <DetailRow label="지원 대상 상세">{targetGroup}</DetailRow>}
           {hasTargetTags && (
             <DetailRow label="대상 태그">
-              {item.target_tags?.map((tag) => `#${tag}`).join(" ")}
+              {detailTargetTags.map((tag) => `#${tag}`).join(" ")}
             </DetailRow>
           )}
         </dl>

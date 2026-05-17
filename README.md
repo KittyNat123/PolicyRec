@@ -197,4 +197,4 @@ GitHub Actions가 매주 수요일 06:00 KST(화 21:00 UTC)에 자동 실행:
 | :--- | :--- |
 | **유창엽** | 데이터 수집·정제 메인 노트북, 자동 수집 yml, 검색·정렬 로직 |
 | **김보미** | Gemini 임베딩, Supabase 적재, 추천 RPC, 평가 지표 |
-| **권희민** | Next.js 웹 앱 (UI / API Route / 챗봇 RAG) |
+| **권희민** | Next.js, E2E 테스트(UI / API Route / 챗봇 RAG) |

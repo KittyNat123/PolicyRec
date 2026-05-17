@@ -94,7 +94,7 @@ export function recruitmentStatus(
 }
 
 // ---------------------------------------------------------------------
-// 대상 연령 표시 — "20 ~ 39세", "40세 이상", "연령 제한 없음"
+// 대상 연령 표시 — "만 20세 ~ 만 39세", "만 40세 이상", "연령 확인 필요"
 // ---------------------------------------------------------------------
 export function formatTargetAgeRange(
   min: number | null | undefined,
@@ -104,12 +104,14 @@ export function formatTargetAgeRange(
   const hasMax = typeof max === "number" && Number.isFinite(max);
 
   if (hasMin && hasMax) {
-    if (min === max) return `${min}세`;
-    return `${min} ~ ${max}세`;
+    // ☑️수정: 저장된 연령값은 보정하지 않고, 뒤집힌 범위만 비정상 표시로 분리
+    if (min > max) return "연령 확인 필요";
+    if (min === max) return `만 ${min}세`;
+    return `만 ${min}세 ~ 만 ${max}세`;
   }
-  if (hasMin) return `${min}세 이상`;
-  if (hasMax) return `${max}세 이하`;
-  return "연령 제한 없음/확인필요";
+  if (hasMin) return `만 ${min}세 이상`;
+  if (hasMax) return `만 ${max}세 이하`;
+  return "연령 확인 필요";
 }
 
 // ---------------------------------------------------------------------

@@ -448,13 +448,16 @@ const SORT_DESCRIPTIONS: Record<SortBy, string> = {
 
 // ☑️수정: 데모에서 바로 눌러볼 대표 통합검색 문구로 인기 검색어를 정리
 const DEMO_POPULAR_KEYWORDS = [
-  "서울 청년 창업 지원",
+  "경기도 청년 일자리",
   "청년 자산형성 저축 지원",
   "사회초년생 공공임대주택",
 ];
 
 // ☑️수정: 문장형 질의도 통합검색 입력/검색 흐름으로 보여주기 위한 데모 버튼 문구
 const DEMO_SENTENCE_QUERY = "부산에서 전세피해 지원받을 수 있을까";
+// ☑️수정: 챗봇 버튼별 중복 질문 입력 제거 - 문장형 검색과 겹치지 않는 추천 정리용 질문
+const DEMO_CHATBOT_QUERY =
+  "내 조건에 맞는 정책 공고를 추천해주고, 먼저 확인할 부분을 정리해줘";
 
 export default function Home() {
   const [query, setQuery] = useState("");
@@ -811,6 +814,31 @@ export default function Home() {
     setChatInput(prompt);
   }
 
+  function openFreshChatWithPrompt(prompt: string) {
+    // ☑️수정: 메인 챗봇 카드 진입은 기존 대화/검색 맥락을 비우고 새 질문으로 시작
+    chatAbortRef.current?.abort();
+    chatAbortRef.current = null;
+    setChatMessages([]);
+    setChatInput(prompt);
+    setChatLoading(false);
+    setChatError(null);
+    setActiveChatId(null);
+    setCurrentSessionId(createClientSessionId());
+    pendingChatOverrideRef.current = null;
+    activeChatOverrideRef.current = null;
+    setLeaveAction(null);
+    setChatOpen(true);
+  }
+
+  function openDemoChatbotQuestion() {
+    openFreshChatWithPrompt(DEMO_CHATBOT_QUERY);
+  }
+
+  // ☑️수정: 챗봇 버튼별 중복 질문 입력 제거 - 빈 질문 상태로 상담창만 열기
+  function openBlankChatbot() {
+    openFreshChatWithPrompt("");
+  }
+
   function focusConditionFilters() {
     setActiveSearchTab("filtered");
     setHighlightFilter(true);
@@ -864,7 +892,8 @@ export default function Home() {
       setRecommendPrompt("scrap");
       return;
     }
-    openChatWithPrompt("내가 스크랩한 정책과 비슷한 정책 중 지금 신청 가능한 공고를 추천해주고 추천 이유도 알려줘.");
+    // ☑️수정: 챗봇 진입 문구를 현재 질문 기반 탐색 문구로 완화
+    openChatWithPrompt("내 상황에 맞는 공고를 질문으로 찾아보고 싶어요.");
   }
 
   async function handleHeaderAuthChange(action: "login" | "signup" | "logout") {
@@ -1708,7 +1737,6 @@ export default function Home() {
       ? "검색 결과"
       : "지금 신청 가능한 정책";
   const isInitialLoading = !searched && browseLoading && results.length === 0;
-  const isAdmin = currentUser?.role === "admin";
   const hasSearchQueryForRecommendation =
     activeSearchTab === "integrated" &&
     (query.trim().length > 0 || lastSearchQuery.trim().length > 0);
@@ -1735,6 +1763,15 @@ export default function Home() {
       : activeSearchTab === "filtered"
         ? "조건에 맞는 공고를 불러오고 있어요."
         : "검색 결과를 불러오고 있어요.";
+  // ☑️수정: 조건검색에서 선택한 칩은 조건검색 탭에서만 표시하고 통합검색에는 검색어 칩만 표시
+  const appliedChipCategories =
+    activeSearchTab === "filtered" ? filterCategories.filter((value) => value !== ALL) : [];
+  const appliedChipRegions =
+    activeSearchTab === "filtered" ? filterRegion.filter((value) => value !== ALL) : [];
+  const appliedChipTargets =
+    activeSearchTab === "filtered" ? filterTargets.filter((value) => value !== ALL) : [];
+  const appliedChipStatuses =
+    activeSearchTab === "filtered" ? filterStatus.filter((value) => value !== ALL) : [];
   // ☑️수정: AI 추천 공고 카드에는 로그인 사용자의 프로필 조건을 짧은 칩으로 표시
   const profileSummaryChips = [
     typeof savedFilter?.target_age === "number" ? `나이 ${savedFilter.target_age}세` : null,
@@ -1840,8 +1877,8 @@ export default function Home() {
                       )
                     ) : (
                       <p className="mt-2 max-w-xl text-sm leading-6 text-slate-600">
-                        {/* ☑️수정: AI 추천이 프로필과 스크랩을 항상 모두 쓰는 것처럼 보이지 않도록 완화 */}
-                        저장한 프로필 조건 또는 스크랩 이력을 바탕으로 추천합니다.
+                        {/* ☑️수정: 챗봇/추천 소개가 과장된 상담처럼 보이지 않도록 문구 완화 */}
+                        저장한 프로필 조건을 참고해 관련 공고를 먼저 보여드립니다.
                       </p>
                     )}
                   </div>
@@ -1920,33 +1957,36 @@ export default function Home() {
 
               <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex items-start justify-between gap-3">
-                  <p className="text-sm font-bold text-slate-950">채팅봇 추천</p>
+                  <p className="text-sm font-bold text-slate-950">챗봇에게 정책 물어보기</p>
                   <button
                     type="button"
-                    onClick={requestProfileRecommendation}
+                    onClick={openBlankChatbot}
                     className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-blue-700"
                   >
-                    {/* ☑️수정: 기존 AI 추천 동작은 채팅봇 추천 카드 상단 버튼으로 이동 */}
-                    AI 추천
+                    {/* // ☑️수정: 챗봇 버튼별 중복 질문 입력 제거 - 상단 CTA는 빈 챗봇 열기 */}
+                    챗봇 열기
                   </button>
                 </div>
                 <p className="mt-2 text-sm leading-6 text-slate-600">
-                  추천 기준을 고르면 AI봇이 이유까지 함께 설명해드려요.
+                  {/* ☑️수정: 챗봇 설명을 현재 질문 기반 검색/설명 기능으로 제한 */}
+                  내 상황을 문장으로 질문하면, 관련 공고를 찾아 쉽게 설명해드려요.
                 </p>
                 <div className="mt-4 grid gap-2">
                   <button
                     type="button"
-                    onClick={requestProfileRecommendation}
+                    onClick={openDemoChatbotQuestion}
                     className="rounded-xl border border-slate-200 px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50"
                   >
-                    내 조건에 맞는 공고 물어보기
+                    {/* // ☑️수정: 챗봇 버튼별 중복 질문 입력 제거 - 추천 질문 입력 */}
+                    맞춤 공고 추천받기
                   </button>
                   <button
                     type="button"
-                    onClick={requestScrapRecommendation}
+                    onClick={openBlankChatbot}
                     className="rounded-xl border border-slate-200 px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50"
                   >
-                    스크랩한 정책과 비슷한 공고 물어보기
+                    {/* // ☑️수정: 챗봇 버튼별 중복 질문 입력 제거 - 직접 입력용 빈 챗봇 열기 */}
+                    직접 질문 입력하기
                   </button>
                 </div>
               </div>
@@ -2107,10 +2147,10 @@ export default function Home() {
                   <AppliedSearchChips
                     activeTab={activeSearchTab}
                     query={activeSearchTab === "filtered" ? "" : query.trim()}
-                    categories={filterCategories.filter((value) => value !== ALL)}
-                    regions={filterRegion.filter((value) => value !== ALL)}
-                    targets={filterTargets.filter((value) => value !== ALL)}
-                    statuses={filterStatus.filter((value) => value !== ALL)}
+                    categories={appliedChipCategories}
+                    regions={appliedChipRegions}
+                    targets={appliedChipTargets}
+                    statuses={appliedChipStatuses}
                   />
                 </div>
               </section>
@@ -2244,7 +2284,6 @@ export default function Home() {
                   canScrap={Boolean(currentUser)}
                   isScrapped={scrappedIds.has(r.id)}
                   onToggleScrap={toggleScrap}
-                  showSimilarityScore={isAdmin}
                 />
               ))}
             </ul>
@@ -2746,7 +2785,6 @@ function ChatPanel({
                             canScrap={Boolean(currentUser)}
                             isScrapped={scrappedIds.has(r.id)}
                             onToggleScrap={onToggleScrap}
-                            showSimilarityScore={currentUser?.role === "admin"}
                           />
                         ))}
                       </ul>
